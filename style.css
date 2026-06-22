@@ -648,3 +648,215 @@ button {
     margin-bottom: 20px;
   }
 }
+
+/* ============================================================
+   CHARACTER DETAIL PAGE
+   ============================================================ */
+.charpage {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.charpage--missing {
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.charpage__back {
+  align-self: flex-start;
+  appearance: none;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 8px 16px;
+  border-radius: 999px;
+  font-weight: 600;
+  font-size: 0.88rem;
+  transition: border-color 0.18s ease, background-color 0.18s ease;
+}
+.charpage__back:hover {
+  border-color: var(--accent);
+  background: #24242b;
+}
+
+.charpage__grid {
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  gap: 28px;
+  align-items: start;
+}
+
+.charpage__aside {
+  position: sticky;
+  top: 88px;
+}
+
+.charpage__card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.charpage__art {
+  width: 100%;
+  aspect-ratio: 3 / 4;
+  object-fit: cover;
+  background: var(--surface-2);
+}
+.charpage__cardbody {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.charpage__name {
+  margin: 0;
+  font-size: 1.3rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+.charpage__creator {
+  margin-top: -6px;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+.charpage__stats {
+  display: flex;
+  gap: 16px;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+.charpage__chat {
+  appearance: none;
+  margin-top: 4px;
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  color: #1a0a10;
+  font-weight: 700;
+  font-size: 0.98rem;
+  padding: 12px 16px;
+  border-radius: 12px;
+  min-height: 46px;
+  transition: background-color 0.18s ease, box-shadow 0.18s ease,
+    transform 0.12s ease;
+}
+.charpage__chat:hover {
+  background: var(--accent-2);
+  box-shadow: 0 8px 24px -8px rgba(255, 82, 119, 0.6);
+}
+.charpage__chat:active {
+  transform: translateY(1px);
+}
+
+.charpage__main {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+.charpage__tagline {
+  margin: 0;
+  font-size: 1.05rem;
+  line-height: 1.6;
+}
+
+.charpage__defhdr {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-top: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+  font-weight: 700;
+}
+.charpage__toktotal {
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.def {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+}
+.def > summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 13px 16px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  user-select: none;
+}
+.def > summary::-webkit-details-marker {
+  display: none;
+}
+.def > summary::after {
+  content: "\25BE";
+  color: var(--muted);
+  transition: transform 0.18s ease;
+}
+.def[open] > summary::after {
+  transform: rotate(180deg);
+}
+.def__tok {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-weight: 600;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+.def__body {
+  padding: 0 16px 16px;
+  color: var(--muted);
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+.comments {
+  margin-top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.comments__hdr {
+  font-weight: 700;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+.comment {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px 14px;
+}
+.comment__author {
+  margin-bottom: 4px;
+  color: var(--accent-2);
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+.comment__text {
+  color: var(--muted);
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+
+@media (max-width: 760px) {
+  .charpage__grid {
+    grid-template-columns: 1fr;
+    gap: 18px;
+  }
+  .charpage__aside {
+    position: static;
+  }
+  .charpage__art {
+    aspect-ratio: 16 / 10;
+  }
+}

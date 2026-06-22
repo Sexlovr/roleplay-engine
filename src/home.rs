@@ -8,7 +8,7 @@ use crate::types::Page;
 use crate::data;
 
 /// Compact a count for the card meta row: `1_234 -> "1.2k"`, `980_000 -> "980k"`.
-fn compact(n: u32) -> String {
+pub fn compact(n: u32) -> String {
     if n < 1_000 {
         n.to_string()
     } else if n < 1_000_000 {
@@ -152,7 +152,7 @@ pub fn Home() -> impl IntoView {
                                     view! {
                                         <article
                                             class="card"
-                                            on:click=move |_| page.set(Page::Chat(id))
+                                            on:click=move |_| page.set(Page::Character(id))
                                         >
                                             <img class="card__img" src=avatar alt=alt />
                                             <div class="card__body">

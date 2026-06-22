@@ -104,7 +104,7 @@ pub fn Chat(id: u32) -> impl IntoView {
     view! {
         <div class="chat">
             <div class="chat__topbar">
-                <button class="chat__back" on:click=move |_| page.set(Page::Home)>
+                <button class="chat__back" on:click=move |_| page.set(Page::Character(id))>
                     "\u{2190}"
                 </button>
                 <img class="chat__avatar" src=avatar alt="" />

@@ -8,6 +8,7 @@ mod types;
 mod data;
 mod header;
 mod home;
+mod character;
 mod chat;
 
 use leptos::prelude::*;
@@ -15,6 +16,7 @@ use leptos::prelude::*;
 use types::Page;
 use header::Header;
 use home::Home;
+use character::CharacterPage;
 use chat::Chat;
 
 /// Newtype wrappers so contexts of the same primitive type don't collide.
@@ -35,6 +37,7 @@ fn App() -> impl IntoView {
         <main class="content">
             {move || match page.get() {
                 Page::Home => view! { <Home/> }.into_any(),
+                Page::Character(id) => view! { <CharacterPage id=id/> }.into_any(),
                 Page::Chat(id) => view! { <Chat id=id/> }.into_any(),
             }}
         </main>

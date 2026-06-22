@@ -31,5 +31,6 @@ pub struct ChatMessage {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Page {
     Home,
-    Chat(u32), // character id
+    Character(u32), // character id — detail page
+    Chat(u32),      // character id
 }
