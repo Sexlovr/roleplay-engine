@@ -6,13 +6,16 @@
 
 mod types;
 mod data;
+mod api;
 mod header;
 mod home;
 mod character;
 mod chat;
+mod settings;
 
 use leptos::prelude::*;
 
+use api::ProxyConfig;
 use types::Page;
 use header::Header;
 use home::Home;
@@ -24,6 +27,12 @@ use chat::Chat;
 pub struct SearchQuery(pub RwSignal<String>);
 #[derive(Copy, Clone)]
 pub struct NsfwEnabled(pub RwSignal<bool>);
+/// The active chat connector config (persisted to localStorage).
+#[derive(Copy, Clone)]
+pub struct ApiConfig(pub RwSignal<ProxyConfig>);
+/// Whether the API Settings drawer is open.
+#[derive(Copy, Clone)]
+pub struct SettingsOpen(pub RwSignal<bool>);
 
 #[component]
 fn App() -> impl IntoView {
@@ -31,6 +40,12 @@ fn App() -> impl IntoView {
     provide_context(page);
     provide_context(SearchQuery(RwSignal::new(String::new())));
     provide_context(NsfwEnabled(RwSignal::new(false)));
+
+    // Load any saved connector config from localStorage, else a default.
+    let cfg = api::load().unwrap_or_default();
+    let settings_open = RwSignal::new(false);
+    provide_context(ApiConfig(RwSignal::new(cfg)));
+    provide_context(SettingsOpen(settings_open));
 
     view! {
         <Header/>
@@ -41,6 +56,7 @@ fn App() -> impl IntoView {
                 Page::Chat(id) => view! { <Chat id=id/> }.into_any(),
             }}
         </main>
+        {move || settings_open.get().then(|| view! { <settings::Settings/> })}
     }
 }
 
