@@ -4,10 +4,46 @@
 //! feel alive. Tags are drawn from a shared vocabulary so filtering is
 //! meaningful; avatar URLs are all distinct.
 
+use gloo_storage::{LocalStorage, Storage};
+
 use crate::types::Character;
 
-/// Returns the seed roster of characters shown on the home page.
-pub fn characters() -> Vec<Character> {
+const USER_KEY: &str = "rp_user_characters";
+
+/// User-created characters, newest first (persisted to localStorage).
+pub fn user_characters() -> Vec<Character> {
+    LocalStorage::get(USER_KEY).unwrap_or_default()
+}
+
+/// All characters shown in the app: user creations first, then the builtin roster.
+pub fn all() -> Vec<Character> {
+    let mut v = user_characters();
+    v.extend(builtin());
+    v
+}
+
+/// Look up a character by id across user + builtin.
+pub fn find(id: u32) -> Option<Character> {
+    all().into_iter().find(|c| c.id == id)
+}
+
+/// Next free id (max existing + 1).
+pub fn next_id() -> u32 {
+    all().iter().map(|c| c.id).max().unwrap_or(0) + 1
+}
+
+/// Persist a new user character (assigns it a fresh id) and return that id.
+pub fn add_user_character(mut c: Character) -> u32 {
+    let id = next_id();
+    c.id = id;
+    let mut u = user_characters();
+    u.insert(0, c);
+    let _ = LocalStorage::set(USER_KEY, &u);
+    id
+}
+
+/// The seed roster of builtin characters.
+pub fn builtin() -> Vec<Character> {
     vec![
         Character {
             id: 1,

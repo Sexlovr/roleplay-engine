@@ -1,7 +1,10 @@
-//! Shared data types and global page state for the AI Hub frontend.
+//! Shared data types and global page state.
 
-/// A character/bot card, as shown in the gallery and chat view.
-#[derive(Clone, Debug, PartialEq)]
+use serde::{Deserialize, Serialize};
+
+/// A character/bot card, as shown in the gallery, detail page, and chat view.
+/// `Serialize`/`Deserialize` so user-created characters persist to localStorage.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Character {
     pub id: u32,
     pub name: String,
@@ -26,6 +29,14 @@ pub struct ChatMessage {
     pub text: String,
 }
 
+/// The user's roleplay identity, injected into the chat system prompt.
+/// Persisted to localStorage.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Persona {
+    pub name: String,
+    pub description: String,
+}
+
 /// Which screen is currently shown. Stored as `RwSignal<Page>` in context;
 /// any component can navigate by calling `page.set(...)`.
 #[derive(Clone, Debug, PartialEq)]
@@ -33,4 +44,5 @@ pub enum Page {
     Home,
     Character(u32), // character id — detail page
     Chat(u32),      // character id
+    Create,         // create-a-character form
 }

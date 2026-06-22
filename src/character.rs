@@ -20,7 +20,7 @@ fn est_tokens(s: &str) -> u32 {
 pub fn CharacterPage(id: u32) -> impl IntoView {
     let page = use_context::<RwSignal<Page>>().unwrap();
 
-    let Some(c) = data::characters().into_iter().find(|c| c.id == id) else {
+    let Some(c) = data::find(id) else {
         return view! {
             <div class="charpage charpage--missing">
                 <button class="charpage__back" on:click=move |_| page.set(Page::Home)>

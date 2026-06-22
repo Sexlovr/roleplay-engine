@@ -1039,3 +1039,232 @@ button {
     border-left: none;
   }
 }
+
+/* ============================================================
+   SORT TABS + PAGER + CREATE BUTTON
+   ============================================================ */
+.header__create {
+  white-space: nowrap;
+}
+.tab-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.tab {
+  appearance: none;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--muted);
+  font-weight: 700;
+  font-size: 0.92rem;
+  padding: 8px 14px;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: color 0.18s ease, background-color 0.18s ease, border-color 0.18s ease;
+}
+.tab:hover {
+  color: var(--text);
+}
+.tab--active {
+  color: var(--text);
+  background: var(--surface-2);
+  border-color: var(--border);
+}
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  margin-top: 26px;
+}
+.pager__btn {
+  appearance: none;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-weight: 600;
+  padding: 9px 16px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: border-color 0.18s ease, background-color 0.18s ease;
+}
+.pager__btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: #24242b;
+}
+.pager__btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.pager__info {
+  color: var(--muted);
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+
+/* ============================================================
+   CHAT: MENU + PER-MESSAGE ACTIONS + EDIT
+   ============================================================ */
+.chat__menuwrap {
+  position: relative;
+  flex-shrink: 0;
+}
+.chat__menubtn {
+  appearance: none;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  font-size: 1.05rem;
+  cursor: pointer;
+  transition: border-color 0.18s ease, background-color 0.18s ease;
+}
+.chat__menubtn:hover {
+  border-color: var(--accent);
+  background: #24242b;
+}
+.menu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+}
+.chat__menu {
+  position: absolute;
+  top: 46px;
+  right: 0;
+  z-index: 61;
+  min-width: 190px;
+  display: flex;
+  flex-direction: column;
+  padding: 6px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 16px 40px -16px rgba(0, 0, 0, 0.7);
+}
+.chat__menu button {
+  appearance: none;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  text-align: left;
+  padding: 10px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  white-space: nowrap;
+}
+.chat__menu button:hover {
+  background: var(--surface);
+}
+.msg__wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-width: 72%;
+}
+.msg--user .msg__wrap {
+  align-items: flex-end;
+}
+.msg__wrap .msg__bubble {
+  max-width: 100%;
+}
+.msg__actions {
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+.msg:hover .msg__actions {
+  opacity: 1;
+}
+.msg__act {
+  appearance: none;
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 0.85rem;
+  padding: 2px 5px;
+  border-radius: 6px;
+  line-height: 1;
+}
+.msg__act:hover {
+  color: var(--text);
+  background: var(--surface-2);
+}
+.msg__edit {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  min-width: 280px;
+}
+.msg__editbtns {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+@media (max-width: 640px) {
+  .msg__actions {
+    opacity: 0.55;
+  }
+}
+
+/* ============================================================
+   CREATE A CHARACTER
+   ============================================================ */
+.create {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.create__grid {
+  display: grid;
+  grid-template-columns: 300px 1fr;
+  gap: 28px;
+  align-items: start;
+}
+.create__preview {
+  position: sticky;
+  top: 88px;
+}
+.create__form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.create__check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+.create__check input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent);
+}
+.create__submit {
+  align-self: flex-start;
+  margin-top: 6px;
+}
+.create__submit:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+@media (max-width: 760px) {
+  .create__grid {
+    grid-template-columns: 1fr;
+  }
+  .create__preview {
+    position: static;
+    max-width: 280px;
+  }
+}

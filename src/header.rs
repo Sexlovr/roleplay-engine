@@ -31,6 +31,9 @@ pub fn Header() -> impl IntoView {
                 />
 
                 <div class="header__actions">
+                    <button class="btn header__create" on:click=move |_| page.set(Page::Create)>
+                        "+ Create"
+                    </button>
                     <button
                         class="nsfw-toggle"
                         class=("nsfw-toggle--on", move || nsfw.get())
