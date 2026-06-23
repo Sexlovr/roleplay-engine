@@ -1,16 +1,15 @@
-//! Provider-agnostic chat connector.
+//! Provider-agnostic LLM request/response templating engine.
 //!
-//! Instead of hard-coding one provider's request/response shape (the way JAI
-//! only speaks OpenAI `/v1/chat/completions`), a [`ProxyConfig`] describes *any*
-//! HTTP+JSON endpoint via:
+//! Pure logic with no I/O — builds for both native (backend) and wasm32 (frontend).
+//!
+//! A [`ProxyConfig`] describes *any* HTTP+JSON endpoint via:
 //!   - a URL, headers, model, and credentials,
 //!   - a request **body template** with `{{placeholders}}`, and
 //!   - a **response path** (dot/index path) to pull the reply text out of the
 //!     returned JSON.
 //!
 //! Presets fill these in for OpenAI-compatible, Anthropic, and Gemini; a blank
-//! "Custom" preset lets the user wire up anything — including formats that
-//! don't exist yet. Nothing is restricted to one schema.
+//! "Custom" preset lets the user wire up anything.
 //!
 //! ## Placeholders (substituted in url, header values, and body)
 //!   `{{api_key}}` `{{model}}` `{{temperature}}` `{{max_tokens}}`
@@ -19,14 +18,18 @@
 //!   `{{messages}}` — OpenAI-shaped array `[{"role","content"}...]` (no system)
 //!   `{{messages_system}}` — same, with the system message prepended
 
-use gloo_storage::{LocalStorage, Storage};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::types::ChatMessage;
+/// A chat message as it flows through the templating engine and API layer.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ChatMessage {
+    pub from_user: bool,
+    pub text: String,
+}
 
-pub const STORAGE_KEY: &str = "rp_proxy_config";
-
+/// Describes an LLM endpoint: URL, credentials, request body shape, and where
+/// the reply text lives in the response JSON.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ProxyConfig {
     pub name: String,
@@ -43,16 +46,16 @@ pub struct ProxyConfig {
 
 impl Default for ProxyConfig {
     fn default() -> Self {
-        // An empty config — the user must point it at their own endpoint.
         ProxyConfig {
             name: "My Proxy".into(),
             url: String::new(),
             api_key: String::new(),
             model: String::new(),
-            headers: vec![("Authorization".into(), "Bearer {{api_key}}".into())],
-            body_template:
-                "{\n  \"model\": \"{{model}}\",\n  \"messages\": {{messages_system}},\n  \"temperature\": {{temperature}},\n  \"max_tokens\": {{max_tokens}}\n}"
-                    .into(),
+            headers: vec![(
+                "Authorization".into(),
+                "Bearer {{api_key}}".into(),
+            )],
+            body_template: "{\n  \"model\": \"{{model}}\",\n  \"messages\": {{messages_system}},\n  \"temperature\": {{temperature}},\n  \"max_tokens\": {{max_tokens}}\n}".into(),
             response_path: "choices.0.message.content".into(),
             temperature: 0.8,
             max_tokens: 600,
@@ -61,19 +64,20 @@ impl Default for ProxyConfig {
 }
 
 impl ProxyConfig {
-    fn openai() -> Self {
+    pub fn openai() -> Self {
         ProxyConfig {
             name: "OpenAI-compatible".into(),
             url: "https://api.openai.com/v1/chat/completions".into(),
-            headers: vec![("Authorization".into(), "Bearer {{api_key}}".into())],
-            body_template:
-                "{\n  \"model\": \"{{model}}\",\n  \"messages\": {{messages_system}},\n  \"temperature\": {{temperature}},\n  \"max_tokens\": {{max_tokens}}\n}"
-                    .into(),
+            headers: vec![(
+                "Authorization".into(),
+                "Bearer {{api_key}}".into(),
+            )],
+            body_template: "{\n  \"model\": \"{{model}}\",\n  \"messages\": {{messages_system}},\n  \"temperature\": {{temperature}},\n  \"max_tokens\": {{max_tokens}}\n}".into(),
             response_path: "choices.0.message.content".into(),
             ..Default::default()
         }
     }
-    fn anthropic() -> Self {
+    pub fn anthropic() -> Self {
         ProxyConfig {
             name: "Anthropic".into(),
             url: "https://api.anthropic.com/v1/messages".into(),
@@ -81,26 +85,22 @@ impl ProxyConfig {
                 ("x-api-key".into(), "{{api_key}}".into()),
                 ("anthropic-version".into(), "2023-06-01".into()),
             ],
-            body_template:
-                "{\n  \"model\": \"{{model}}\",\n  \"max_tokens\": {{max_tokens}},\n  \"temperature\": {{temperature}},\n  \"system\": \"{{system}}\",\n  \"messages\": {{messages}}\n}"
-                    .into(),
+            body_template: "{\n  \"model\": \"{{model}}\",\n  \"max_tokens\": {{max_tokens}},\n  \"temperature\": {{temperature}},\n  \"system\": \"{{system}}\",\n  \"messages\": {{messages}}\n}".into(),
             response_path: "content.0.text".into(),
             ..Default::default()
         }
     }
-    fn gemini() -> Self {
+    pub fn gemini() -> Self {
         ProxyConfig {
             name: "Gemini".into(),
             url: "https://generativelanguage.googleapis.com/v1beta/models/{{model}}:generateContent?key={{api_key}}".into(),
             headers: vec![],
-            body_template:
-                "{\n  \"systemInstruction\": { \"parts\": [{ \"text\": \"{{system}}\" }] },\n  \"contents\": [{ \"role\": \"user\", \"parts\": [{ \"text\": \"{{prompt}}\" }] }]\n}"
-                    .into(),
+            body_template: "{\n  \"systemInstruction\": { \"parts\": [{ \"text\": \"{{system}}\" }] },\n  \"contents\": [{ \"role\": \"user\", \"parts\": [{ \"text\": \"{{prompt}}\" }] }]\n}".into(),
             response_path: "candidates.0.content.parts.0.text".into(),
             ..Default::default()
         }
     }
-    fn blank() -> Self {
+    pub fn blank() -> Self {
         ProxyConfig {
             name: "Custom".into(),
             url: String::new(),
@@ -122,23 +122,17 @@ pub fn presets() -> Vec<ProxyConfig> {
     ]
 }
 
-// ---- persistence ----------------------------------------------------------
-pub fn load() -> Option<ProxyConfig> {
-    LocalStorage::get(STORAGE_KEY).ok()
-}
-pub fn save(cfg: &ProxyConfig) {
-    let _ = LocalStorage::set(STORAGE_KEY, cfg);
-}
-
 // ---- templating ------------------------------------------------------------
+
 /// JSON-escape `s` and strip the surrounding quotes, so it can be dropped
 /// inside a `"..."` in a template.
-fn esc(s: &str) -> String {
+pub fn esc(s: &str) -> String {
     let q = serde_json::to_string(s).unwrap_or_else(|_| "\"\"".into());
     q[1..q.len() - 1].to_string()
 }
 
-fn messages_array(history: &[ChatMessage]) -> Value {
+/// Build an OpenAI-shaped `[{"role","content"}...]` array (no system message).
+pub fn messages_array(history: &[ChatMessage]) -> Value {
     Value::Array(
         history
             .iter()
@@ -152,7 +146,8 @@ fn messages_array(history: &[ChatMessage]) -> Value {
     )
 }
 
-fn fill(
+/// Substitute all placeholders in `s`.
+pub fn fill(
     s: &str,
     cfg: &ProxyConfig,
     messages: &str,
@@ -185,19 +180,15 @@ pub fn extract(v: &Value, path: &str) -> Option<String> {
     match cur {
         Value::String(s) => Some(s.clone()),
         Value::Number(_) | Value::Bool(_) => Some(cur.to_string()),
-        // Object/Array/Null aren't a usable reply — report "not found" so the
-        // user learns their response_path stops short of the text leaf instead
-        // of seeing raw JSON rendered as the bot's message.
         _ => None,
     }
 }
 
-fn truncate(s: &str, n: usize) -> String {
+/// Truncate `s` to at most `n` bytes on a UTF-8 char boundary.
+pub fn truncate(s: &str, n: usize) -> String {
     if s.len() <= n {
         return s.to_string();
     }
-    // Back up to a UTF-8 char boundary: a raw `&s[..n]` panics if byte `n`
-    // lands inside a multibyte codepoint (common in non-ASCII error bodies).
     let mut end = n;
     while end > 0 && !s.is_char_boundary(end) {
         end -= 1;
@@ -205,18 +196,27 @@ fn truncate(s: &str, n: usize) -> String {
     format!("{}…", &s[..end])
 }
 
-/// Send the conversation to the configured endpoint and return the reply text.
-/// `history` is the full visible log (greeting + turns); `system` is the
-/// character's system prompt.
-pub async fn send_chat(
-    cfg: ProxyConfig,
-    history: Vec<ChatMessage>,
-    system: String,
-) -> Result<String, String> {
-    // Drop the synthetic opening greeting (and any other leading non-user
-    // turns) so the request begins with a real user message — required by the
-    // Anthropic Messages API, and it avoids replaying a UI-only greeting as if
-    // the model had produced it.
+/// The result of rendering a template: a fully-resolved HTTP request.
+#[derive(Clone, Debug)]
+pub struct RenderedRequest {
+    pub url: String,
+    pub headers: Vec<(String, String)>,
+    pub body: String,
+}
+
+/// Render a complete LLM request from config + history + system prompt.
+/// Mirrors the old `send_chat`'s pure prep without performing I/O.
+///
+/// Returns an error if the rendered body is not valid JSON (so callers detect
+/// malformed templates before sending HTTP).
+pub fn build_request(
+    cfg: &ProxyConfig,
+    history: &[ChatMessage],
+    system: &str,
+) -> Result<RenderedRequest, String> {
+    // Drop leading non-user turns (e.g. greeting) so the API request starts
+    // with a real user message — required by Anthropic Messages and avoids
+    // replaying a UI-only greeting as if the model produced it.
     let api_history: Vec<ChatMessage> = history
         .iter()
         .skip_while(|m| !m.from_user)
@@ -238,70 +238,91 @@ pub async fn send_chat(
     }
     let msgs_sys = serde_json::to_string(&Value::Array(with_sys)).unwrap();
 
-    let url = fill(&cfg.url, &cfg, &msgs, &msgs_sys, &system, &prompt);
-    let body = fill(&cfg.body_template, &cfg, &msgs, &msgs_sys, &system, &prompt);
+    let url = fill(&cfg.url, cfg, &msgs, &msgs_sys, system, &prompt);
+    let body = fill(&cfg.body_template, cfg, &msgs, &msgs_sys, system, &prompt);
 
-    // Validate the template produced legal JSON before sending (nicer errors).
+    // Validate the rendered body is legal JSON.
     if serde_json::from_str::<Value>(&body).is_err() {
         return Err("Body template did not render to valid JSON — check your placeholders/quotes.".into());
     }
 
-    let mut req = gloo_net::http::Request::post(&url).header("Content-Type", "application/json");
-    for (k, v) in &cfg.headers {
-        if k.trim().is_empty() {
-            continue;
-        }
-        let val = fill(v, &cfg, &msgs, &msgs_sys, &system, &prompt);
-        req = req.header(k, &val);
-    }
+    let headers: Vec<(String, String)> = cfg
+        .headers
+        .iter()
+        .filter(|(k, _)| !k.trim().is_empty())
+        .map(|(k, v)| {
+            let val = fill(v, cfg, &msgs, &msgs_sys, system, &prompt);
+            (k.clone(), val)
+        })
+        .collect();
 
-    let resp = req
-        .body(body)
-        .map_err(|e| format!("request build failed: {e}"))?
-        .send()
-        .await
-        .map_err(|e| format!("network error (CORS or unreachable?): {e}"))?;
-
-    let status = resp.status();
-    let text = resp
-        .text()
-        .await
-        .map_err(|e| format!("could not read response: {e}"))?;
-
-    if !(200..300).contains(&status) {
-        return Err(format!("HTTP {status}: {}", truncate(&text, 300)));
-    }
-    let val: Value = serde_json::from_str(&text)
-        .map_err(|e| format!("response was not JSON: {e} — {}", truncate(&text, 200)))?;
-    extract(&val, &cfg.response_path).ok_or_else(|| {
-        format!(
-            "response_path '{}' not found in: {}",
-            cfg.response_path,
-            truncate(&text, 300)
-        )
-    })
+    Ok(RenderedRequest { url, headers, body })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
     fn extracts_nested_and_indexed() {
-        let v: Value = serde_json::from_str(
-            r#"{"choices":[{"message":{"content":"hi there"}}]}"#,
-        )
-        .unwrap();
-        assert_eq!(extract(&v, "choices.0.message.content").as_deref(), Some("hi there"));
+        let v: Value =
+            serde_json::from_str(r#"{"choices":[{"message":{"content":"hi there"}}]}"#).unwrap();
+        assert_eq!(
+            extract(&v, "choices.0.message.content").as_deref(),
+            Some("hi there")
+        );
         assert_eq!(extract(&v, "choices.5.message.content"), None);
     }
+
     #[test]
     fn esc_escapes_quotes_and_newlines() {
         assert_eq!(esc("a\"b\nc"), "a\\\"b\\nc");
     }
+
     #[test]
     fn fill_injects_message_array_as_raw_json() {
         let cfg = ProxyConfig::openai();
         let out = fill(r#"{"m":{{messages}}}"#, &cfg, "[1,2]", "[3]", "sys", "hi");
         assert_eq!(out, r#"{"m":[1,2]}"#);
+    }
+
+    #[test]
+    fn build_request_starts_with_user_message() {
+        let cfg = ProxyConfig::openai();
+        let history = vec![
+            ChatMessage { from_user: false, text: "Hello! Welcome.".into() },
+            ChatMessage { from_user: true, text: "Hi there".into() },
+            ChatMessage { from_user: false, text: "How can I help?".into() },
+        ];
+        let req = build_request(&cfg, &history, "You are a bot.").unwrap();
+        let body: Value = serde_json::from_str(&req.body).unwrap();
+        let msgs = body["messages"].as_array().unwrap();
+        // First message in the API array should be the system message, second
+        // should be the first user message (the greeting was dropped).
+        assert_eq!(msgs[0]["role"], "system");
+        assert_eq!(msgs[1]["role"], "user");
+        assert_eq!(msgs[1]["content"], "Hi there");
+    }
+
+    #[test]
+    fn truncate_ascii() {
+        assert_eq!(truncate("hello", 3), "hel…");
+        assert_eq!(truncate("hi", 10), "hi");
+    }
+
+    #[test]
+    fn truncate_multibyte() {
+        let s = "a".repeat(5) + &"日".repeat(5);
+        // s = "aaaaa" + 5×"日" (each 日 = 3 UTF-8 bytes) = 20 bytes.
+        // Truncate at byte 8 lands on the second "日", which is a char boundary
+        // — but if it didn't, the walk-back would find one.
+        let t = truncate(&s, 8);
+        assert!(t.ends_with('…'), "expected ellipsis, got: {t}");
+        // Result: "aaaaa日…" = 5 ASCII + 1 CJK (3 bytes) + ellipsis (3 bytes) = 11.
+        assert!(t.len() <= 12, "unexpected len: {}", t.len());
+        // Also test truncation right in the middle of a CJK char.
+        let t2 = truncate(&s, 6); // byte 6 = middle of the first 日
+        assert!(t2.ends_with('…'));
+        assert_eq!(t2, "aaaaa…"); // walked back to byte 5
     }
 }

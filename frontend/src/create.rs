@@ -1,10 +1,12 @@
-//! Create-a-Character page: a form with a live card preview. New characters are
-//! persisted (localStorage) and appear on the home grid immediately.
+//! Create-a-Character page: a form with a live card preview. Characters are
+//! persisted on the server (SQLite) and appear on the home grid immediately.
 
 use leptos::prelude::*;
+use shared::dto::NewCharacterReq;
+use wasm_bindgen_futures::spawn_local;
 
-use crate::data;
-use crate::types::{Character, Page};
+use crate::api;
+use crate::Page;
 
 const FALLBACK_AVATAR: &str = "https://picsum.photos/seed/new-character/400/400";
 
@@ -24,8 +26,13 @@ pub fn Create() -> impl IntoView {
     let avatar = RwSignal::new(String::new());
     let creator = RwSignal::new(String::new());
     let tags_text = RwSignal::new(String::new());
-    let description = RwSignal::new(String::new());
+    let personality = RwSignal::new(String::new());
+    let first_message = RwSignal::new(String::new());
+    let scenario = RwSignal::new(String::new());
     let nsfw = RwSignal::new(false);
+
+    let error = RwSignal::new(String::new());
+    let submitting = RwSignal::new(false);
 
     // Reactive preview values.
     let prev_name = move || {
@@ -46,34 +53,46 @@ pub fn Create() -> impl IntoView {
     };
     let prev_tags = move || parse_tags(&tags_text.get());
 
-    let can_create = move || !name.get().trim().is_empty();
+    let can_create = move || !name.get().trim().is_empty() && !submitting.get();
 
-    let create = move |_| {
-        if name.get().trim().is_empty() {
+    let submit = move |_| {
+        if name.get().trim().is_empty() || submitting.get_untracked() {
             return;
         }
-        let avatar_val = {
-            let a = avatar.get();
-            if a.trim().is_empty() { FALLBACK_AVATAR.to_string() } else { a }
+        error.set(String::new());
+        submitting.set(true);
+
+        let req = NewCharacterReq {
+            name: name.get().trim().to_string(),
+            tagline: Some(tagline.get()).filter(|s| !s.is_empty()),
+            description: None,
+            personality: Some(personality.get()).filter(|s| !s.is_empty()),
+            scenario: Some(scenario.get()).filter(|s| !s.is_empty()),
+            first_message: Some(first_message.get()).filter(|s| !s.is_empty()),
+            avatar: {
+                let a = avatar.get();
+                if a.trim().is_empty() { None } else { Some(a) }
+            },
+            tags: {
+                let t = parse_tags(&tags_text.get());
+                if t.is_empty() { None } else { Some(t) }
+            },
+            creator: {
+                let c = creator.get();
+                if c.trim().is_empty() { None } else { Some(c) }
+            },
+            nsfw: Some(nsfw.get()),
         };
-        let creator_val = {
-            let c = creator.get();
-            if c.trim().is_empty() { "@you".to_string() } else { c }
-        };
-        let c = Character {
-            id: 0,
-            name: name.get(),
-            tagline: tagline.get(),
-            description: description.get(),
-            avatar: avatar_val,
-            tags: parse_tags(&tags_text.get()),
-            creator: creator_val,
-            messages: 0,
-            likes: 0,
-            nsfw: nsfw.get(),
-        };
-        let id = data::add_user_character(c);
-        page.set(Page::Character(id));
+
+        spawn_local(async move {
+            match api::create_character(&req).await {
+                Ok(c) => page.set(Page::Character(c.id)),
+                Err(e) => {
+                    error.set(e);
+                    submitting.set(false);
+                }
+            }
+        });
     };
 
     view! {
@@ -136,11 +155,25 @@ pub fn Create() -> impl IntoView {
                             on:input=move |ev| tags_text.set(event_target_value(&ev)) />
                     </label>
                     <label class="settings-row">
+                        <span>"Personality"<small>" — how the character thinks and speaks"</small></span>
+                        <textarea class="field field--code" rows="4"
+                            placeholder="Confident, quick-witted, loyal to a fault..."
+                            prop:value=move || personality.get()
+                            on:input=move |ev| personality.set(event_target_value(&ev)) ></textarea>
+                    </label>
+                    <label class="settings-row">
                         <span>"First message"<small>" — the character's opening line in chat"</small></span>
-                        <textarea class="field field--code" rows="5"
+                        <textarea class="field field--code" rows="4"
                             placeholder="*She looks up as you enter...*"
-                            prop:value=move || description.get()
-                            on:input=move |ev| description.set(event_target_value(&ev)) ></textarea>
+                            prop:value=move || first_message.get()
+                            on:input=move |ev| first_message.set(event_target_value(&ev)) ></textarea>
+                    </label>
+                    <label class="settings-row">
+                        <span>"Scenario"<small>" — the setting / situation"</small></span>
+                        <textarea class="field field--code" rows="3"
+                            placeholder="A moonlit balcony at a royal gala..."
+                            prop:value=move || scenario.get()
+                            on:input=move |ev| scenario.set(event_target_value(&ev)) ></textarea>
                     </label>
                     <label class="create__check">
                         <input type="checkbox"
@@ -149,10 +182,14 @@ pub fn Create() -> impl IntoView {
                         <span>"NSFW"</span>
                     </label>
 
+                    {move || (!error.get().is_empty()).then(|| view! {
+                        <div class="create__error">{error.get()}</div>
+                    })}
+
                     <button class="btn btn--login create__submit"
                         prop:disabled=move || !can_create()
-                        on:click=create>
-                        "Create character"
+                        on:click=submit>
+                        {move || if submitting.get() { "Creating\u{2026}" } else { "Create character" }}
                     </button>
                 </div>
             </div>

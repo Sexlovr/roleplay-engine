@@ -1,0 +1,7 @@
+[build]
+dist = "dist"
+target = "index.html"
+
+[serve]
+# Proxy /api requests to a local backend during development.
+# Run: trunk serve --proxy-backend=http://127.0.0.1:7860

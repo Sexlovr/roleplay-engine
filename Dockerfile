@@ -2,38 +2,48 @@
 #
 # Roleplay Engine — multi-stage build for Hugging Face Spaces (Docker SDK).
 #
-# Stage 1 compiles the Rust → WASM bundle with Trunk; stage 2 serves the static
-# `dist/` with nginx on port 7860 (HF's required app port).
+# Stage 1 compiles the Rust/WASM frontend with Trunk.
+# Stage 2 compiles the Rust backend.
+# Stage 3 is a slim runtime image that serves both on port 7860.
 #
-# This builds from the local build context (`COPY . .`), which is what Hugging
-# Face does when it clones your Space repo and builds the Dockerfile — and it
-# also works for a private source repo (no clone credentials needed). For a
-# Space that should clone a *public* GitHub repo at build time instead, see
+# Build from the local context (what Hugging Face does when it clones your Space
+# repo). For a Space that clones a public GitHub repo at build time instead, see
 # `Dockerfile.from-git`.
 
-############################  build stage  ############################
-FROM rust:1-bookworm AS build
+############################  frontend build  #############################
+FROM rust:1-bookworm AS fe
 
-# WebAssembly target + Trunk (prebuilt binary, so we don't compile Trunk itself).
 ARG TRUNK_VERSION=0.21.7
 RUN rustup target add wasm32-unknown-unknown \
  && curl -fsSL "https://github.com/trunk-rs/trunk/releases/download/v${TRUNK_VERSION}/trunk-x86_64-unknown-linux-gnu.tar.gz" \
     | tar -xz -C /usr/local/bin trunk
 
 WORKDIR /app
-
-# Build the app. cargo (via trunk) fetches crates; trunk also pulls the matching
-# wasm-bindgen + wasm-opt on first run.
 COPY . .
-RUN trunk build --release
+RUN cd frontend && trunk build --release
 
-############################  serve stage  ###########################
-FROM nginxinc/nginx-unprivileged:1.27-alpine
+############################  backend build  #############################
+FROM rust:1-bookworm AS be
 
-# Serve config (listens on 7860) + the built static bundle.
-COPY nginx.conf /etc/nginx/conf.d/default.conf
-COPY --from=build /app/dist /usr/share/nginx/html
+WORKDIR /app
+COPY . .
+RUN cargo build --release -p backend
 
+############################  runtime  ###################################
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && \
+    rm -rf /var/lib/apt/lists/* && \
+    useradd --create-home --uid 1000 app
+
+COPY --from=fe /app/frontend/dist /app/dist
+COPY --from=be /app/target/release/backend /app/backend
+RUN mkdir -p /data && chown app:app /data
+
+USER app
+WORKDIR /app
+
+ENV STATIC_DIR=/app/dist DATA_DIR=/data PORT=7860
 EXPOSE 7860
-# nginx-unprivileged already runs as a non-root user and starts nginx in the
-# foreground via its default entrypoint/CMD.
+
+CMD ["/app/backend"]

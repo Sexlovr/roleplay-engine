@@ -1,10 +1,13 @@
-//! API Settings drawer: configure the chat connector (see [`crate::api`]).
+//! API Settings drawer: configure the chat connector (provider-agnostic).
 //!
-//! Edits a working copy of the active [`ProxyConfig`]; on Save it persists to
-//! localStorage and updates the global config signal. Preset buttons fill the
-//! template fields for common providers without locking the user in.
+//! Edits a working copy of the active [`ProxyConfig`]; on Save it PUTs to the
+//! server. Preset buttons fill the template fields without changing the API key
+//! (the key is never visible after saving — the server only returns a flag).
 
 use leptos::prelude::*;
+use shared::dto::SettingsReq;
+use shared::template::{self, ProxyConfig};
+use wasm_bindgen_futures::spawn_local;
 
 use crate::api;
 
@@ -31,19 +34,37 @@ fn text_to_headers(s: &str) -> Vec<(String, String)> {
 #[component]
 pub fn Settings() -> impl IntoView {
     let cfg_sig = use_context::<crate::ApiConfig>().unwrap().0;
+    let has_key = use_context::<crate::HasApiKey>().unwrap().0;
     let open = use_context::<crate::SettingsOpen>().unwrap().0;
 
     // Single working draft, seeded from the live config when this mounts.
     let draft = RwSignal::new(cfg_sig.get_untracked());
+    let saving = RwSignal::new(false);
 
     let save = move |_| {
+        if saving.get_untracked() {
+            return;
+        }
         let cfg = draft.get();
-        api::save(&cfg);
-        cfg_sig.set(cfg);
-        open.set(false);
+        saving.set(true);
+        cfg_sig.set(cfg.clone());
+        spawn_local(async move {
+            let req = SettingsReq { proxy: Some(cfg), persona: None };
+            match api::put_settings(&req).await {
+                Ok(()) => {
+                    has_key.set(true); // if they typed one
+                }
+                Err(e) => {
+                    // Surface error — for now just log.
+                    let _ = e;
+                }
+            }
+            saving.set(false);
+            open.set(false);
+        });
     };
 
-    let preset_buttons = api::presets()
+    let preset_buttons = template::presets()
         .into_iter()
         .map(|p| {
             let label = p.name.clone();
@@ -51,7 +72,7 @@ pub fn Settings() -> impl IntoView {
                 <button
                     class="preset-chip"
                     on:click=move |_| draft.update(|d| {
-                        let key = d.api_key.clone(); // keep the user's secret
+                        let key = d.api_key.clone();
                         *d = p.clone();
                         d.api_key = key;
                     })
@@ -72,8 +93,8 @@ pub fn Settings() -> impl IntoView {
 
             <div class="settings-body">
                 <div class="field-hint">
-                    "Bring your own endpoint — any provider. Pick a preset, then edit. "
-                    "The endpoint must allow CORS from this origin."
+                    "Bring your own endpoint — any provider. The endpoint only needs to be reachable "
+                    "from the server (no CORS issues). Your API key is stored server-side, never in the browser."
                 </div>
 
                 <label class="settings-row">
@@ -96,7 +117,8 @@ pub fn Settings() -> impl IntoView {
 
                 <label class="settings-row">
                     <span>"API Key"</span>
-                    <input class="field" type="password" placeholder="sk-... (optional)"
+                    <input class="field" type="password"
+                        placeholder={move || if has_key.get() { "(saved — type to replace)" } else { "sk-..." }}
                         prop:value=move || draft.with(|d| d.api_key.clone())
                         on:input=move |ev| draft.update(|d| d.api_key = event_target_value(&ev)) />
                 </label>
@@ -160,7 +182,9 @@ pub fn Settings() -> impl IntoView {
 
             <div class="settings-actions">
                 <button class="btn" on:click=move |_| open.set(false)>"Cancel"</button>
-                <button class="btn btn--login" on:click=save>"Save"</button>
+                <button class="btn btn--login" prop:disabled=move || saving.get() on:click=save>
+                    {move || if saving.get() { "Saving\u{2026}" } else { "Save" }}
+                </button>
             </div>
         </aside>
     }

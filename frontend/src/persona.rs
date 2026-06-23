@@ -1,20 +1,12 @@
-//! Persona editor: who *you* are in the roleplay. Persisted to localStorage and
+//! Persona editor: who *you* are in the roleplay. Saved to the server and
 //! injected into every chat's system prompt. A slide-in drawer reusing the API
 //! Settings drawer's styles.
 
-use gloo_storage::{LocalStorage, Storage};
 use leptos::prelude::*;
+use shared::dto::SettingsReq;
+use wasm_bindgen_futures::spawn_local;
 
-use crate::types::Persona;
-
-const KEY: &str = "rp_persona";
-
-pub fn load() -> Persona {
-    LocalStorage::get(KEY).unwrap_or_default()
-}
-pub fn save(p: &Persona) {
-    let _ = LocalStorage::set(KEY, p);
-}
+use crate::api;
 
 #[component]
 pub fn PersonaEditor() -> impl IntoView {
@@ -22,12 +14,21 @@ pub fn PersonaEditor() -> impl IntoView {
     let open = use_context::<crate::PersonaOpen>().unwrap().0;
 
     let draft = RwSignal::new(persona.get_untracked());
+    let saving = RwSignal::new(false);
 
     let save_it = move |_| {
+        if saving.get_untracked() {
+            return;
+        }
         let p = draft.get();
-        save(&p);
-        persona.set(p);
-        open.set(false);
+        saving.set(true);
+        persona.set(p.clone());
+        spawn_local(async move {
+            let req = SettingsReq { proxy: None, persona: Some(p) };
+            let _ = api::put_settings(&req).await;
+            saving.set(false);
+            open.set(false);
+        });
     };
 
     view! {
@@ -60,7 +61,9 @@ pub fn PersonaEditor() -> impl IntoView {
 
             <div class="settings-actions">
                 <button class="btn" on:click=move |_| open.set(false)>"Cancel"</button>
-                <button class="btn btn--login" on:click=save_it>"Save"</button>
+                <button class="btn btn--login" prop:disabled=move || saving.get() on:click=save_it>
+                    {move || if saving.get() { "Saving\u{2026}" } else { "Save" }}
+                </button>
             </div>
         </aside>
     }
