@@ -27,6 +27,10 @@ pub struct Character {
 pub struct ChatMessage {
     pub from_user: bool,
     pub text: String,
+    /// True while this bubble is the "…" placeholder awaiting an API reply.
+    /// The async completion locates the placeholder by this flag rather than a
+    /// captured index, so edits/deletes during the request can't misdirect it.
+    pub pending: bool,
 }
 
 /// The user's roleplay identity, injected into the chat system prompt.

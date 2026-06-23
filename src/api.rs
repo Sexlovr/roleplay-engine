@@ -174,24 +174,35 @@ fn fill(
 pub fn extract(v: &Value, path: &str) -> Option<String> {
     let mut cur = v;
     for seg in path.split('.').filter(|s| !s.is_empty()) {
-        cur = match seg.parse::<usize>() {
-            Ok(i) => cur.get(i)?,
-            Err(_) => cur.get(seg)?,
+        // Try an object-key lookup first, then fall back to a numeric array
+        // index. (Key-first lets objects with numeric-string keys resolve,
+        // while arrays still work via the usize fallback.)
+        cur = match cur.get(seg) {
+            Some(child) => child,
+            None => cur.get(seg.parse::<usize>().ok()?)?,
         };
     }
     match cur {
         Value::String(s) => Some(s.clone()),
-        Value::Null => None,
-        other => Some(other.to_string()),
+        Value::Number(_) | Value::Bool(_) => Some(cur.to_string()),
+        // Object/Array/Null aren't a usable reply — report "not found" so the
+        // user learns their response_path stops short of the text leaf instead
+        // of seeing raw JSON rendered as the bot's message.
+        _ => None,
     }
 }
 
 fn truncate(s: &str, n: usize) -> String {
     if s.len() <= n {
-        s.to_string()
-    } else {
-        format!("{}…", &s[..n])
+        return s.to_string();
     }
+    // Back up to a UTF-8 char boundary: a raw `&s[..n]` panics if byte `n`
+    // lands inside a multibyte codepoint (common in non-ASCII error bodies).
+    let mut end = n;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…", &s[..end])
 }
 
 /// Send the conversation to the configured endpoint and return the reply text.
@@ -202,16 +213,27 @@ pub async fn send_chat(
     history: Vec<ChatMessage>,
     system: String,
 ) -> Result<String, String> {
-    let prompt = history
+    // Drop the synthetic opening greeting (and any other leading non-user
+    // turns) so the request begins with a real user message — required by the
+    // Anthropic Messages API, and it avoids replaying a UI-only greeting as if
+    // the model had produced it.
+    let api_history: Vec<ChatMessage> = history
+        .iter()
+        .skip_while(|m| !m.from_user)
+        .cloned()
+        .collect();
+
+    let prompt = api_history
         .iter()
         .rev()
         .find(|m| m.from_user)
         .map(|m| m.text.clone())
         .unwrap_or_default();
 
-    let msgs = serde_json::to_string(&messages_array(&history)).unwrap();
+    let arr = messages_array(&api_history);
+    let msgs = serde_json::to_string(&arr).unwrap();
     let mut with_sys = vec![json!({"role": "system", "content": system})];
-    if let Value::Array(a) = messages_array(&history) {
+    if let Value::Array(a) = arr {
         with_sys.extend(a);
     }
     let msgs_sys = serde_json::to_string(&Value::Array(with_sys)).unwrap();

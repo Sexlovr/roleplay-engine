@@ -22,19 +22,17 @@ pub fn compact(n: u32) -> String {
     if n < 1_000 {
         n.to_string()
     } else if n < 1_000_000 {
-        let thousands = n as f64 / 1_000.0;
         if n < 10_000 && n % 1_000 != 0 {
-            format!("{:.1}k", thousands)
+            // Floor to one decimal so 9_999 reads "9.9k", never "10.0k"
+            // (which `{:.1}` rounding would otherwise produce just under 10k).
+            format!("{:.1}k", (n as f64 / 100.0).floor() / 10.0)
         } else {
             format!("{}k", n / 1_000)
         }
+    } else if n < 10_000_000 && n % 1_000_000 != 0 {
+        format!("{:.1}M", (n as f64 / 100_000.0).floor() / 10.0)
     } else {
-        let millions = n as f64 / 1_000_000.0;
-        if n < 10_000_000 && n % 1_000_000 != 0 {
-            format!("{:.1}M", millions)
-        } else {
-            format!("{}M", n / 1_000_000)
-        }
+        format!("{}M", n / 1_000_000)
     }
 }
 

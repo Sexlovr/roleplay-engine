@@ -543,28 +543,39 @@ button {
   border-top: 1px solid var(--border);
 }
 
-.chat__composer input {
+.chat__composer .chat__input {
   flex: 1;
   min-width: 0;
   background: var(--surface-2);
   border: 1px solid var(--border);
   color: var(--text);
-  padding: 12px 18px;
-  border-radius: 999px;
+  font-family: inherit;
+  font-size: 0.95rem;
+  line-height: 1.4;
+  padding: 11px 18px;
+  border-radius: 22px;
   outline: none;
   min-height: 44px;
+  max-height: 140px;
+  resize: none;
+  overflow-y: auto;
   transition: border-color 0.18s ease, box-shadow 0.18s ease,
     background-color 0.18s ease;
 }
 
-.chat__composer input::placeholder {
+.chat__composer .chat__input::placeholder {
   color: var(--muted);
 }
 
-.chat__composer input:focus {
+.chat__composer .chat__input:focus {
   border-color: var(--accent);
   background: var(--surface);
   box-shadow: 0 0 0 3px rgba(255, 82, 119, 0.22);
+}
+
+.chat__send:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 .chat__send {

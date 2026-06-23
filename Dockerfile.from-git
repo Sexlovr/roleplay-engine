@@ -1,0 +1,39 @@
+# syntax=docker/dockerfile:1
+#
+# Variant that CLONES the source repo at build time instead of using the local
+# build context. Use this when you want a Hugging Face Space that contains only
+# a Dockerfile + README (no source) — HF builds this, it clones the repo, and
+# serves it.
+#
+# Deploy as a one-file Space:
+#   1. Create a Docker Space on HF.
+#   2. Add this file as `Dockerfile` and a README.md with the HF front-matter
+#      (see the project README's "Deploy to Hugging Face" section).
+#   3. Push — HF builds it and clones the repo below.
+#
+# The repo must be PUBLIC (a shallow clone needs no auth). For a private repo,
+# pass a tokenized URL as a build arg / HF build secret, e.g.:
+#   --build-arg REPO_URL=https://<user>:<token>@github.com/Sexlovr/roleplay-engine.git
+
+############################  build stage  ############################
+FROM rust:1-bookworm AS build
+
+ARG TRUNK_VERSION=0.21.7
+RUN rustup target add wasm32-unknown-unknown \
+ && curl -fsSL "https://github.com/trunk-rs/trunk/releases/download/v${TRUNK_VERSION}/trunk-x86_64-unknown-linux-gnu.tar.gz" \
+    | tar -xz -C /usr/local/bin trunk
+
+ARG REPO_URL=https://github.com/Sexlovr/roleplay-engine.git
+ARG REPO_REF=main
+
+WORKDIR /app
+RUN git clone --depth 1 --branch "${REPO_REF}" "${REPO_URL}" . \
+ && trunk build --release
+
+############################  serve stage  ###########################
+FROM nginxinc/nginx-unprivileged:1.27-alpine
+
+COPY --from=build /app/nginx.conf /etc/nginx/conf.d/default.conf
+COPY --from=build /app/dist /usr/share/nginx/html
+
+EXPOSE 7860

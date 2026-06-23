@@ -16,19 +16,25 @@ pub fn Header() -> impl IntoView {
             <div class="header__inner">
                 <div
                     class="header__logo"
-                    on:click=move |_| page.set(Page::Home)
+                    on:click=move |_| { search.set(String::new()); page.set(Page::Home) }
                 >
                     <span class="header__logo-accent">"Roleplay"</span>
                     " Engine"
                 </div>
 
-                <input
-                    class="header__search"
-                    r#type="text"
-                    placeholder="Search characters..."
-                    prop:value=move || search.get()
-                    on:input=move |ev| search.set(event_target_value(&ev))
-                />
+                // The search box only makes sense on the gallery, so hide it
+                // elsewhere — that also stops a stale query from silently
+                // filtering Home when the user returns to it.
+                {move || (page.get() == Page::Home).then(|| view! {
+                    <input
+                        class="header__search"
+                        r#type="text"
+                        placeholder="Search characters..."
+                        aria-label="Search characters"
+                        prop:value=move || search.get()
+                        on:input=move |ev| search.set(event_target_value(&ev))
+                    />
+                })}
 
                 <div class="header__actions">
                     <button class="btn header__create" on:click=move |_| page.set(Page::Create)>

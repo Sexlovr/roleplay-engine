@@ -1,0 +1,7 @@
+# Keep the build context small + reproducible.
+/target
+/dist
+/.git
+/docs
+**/*.log
+node_modules

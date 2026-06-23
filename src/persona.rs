@@ -32,7 +32,7 @@ pub fn PersonaEditor() -> impl IntoView {
 
     view! {
         <div class="settings-backdrop" on:click=move |_| open.set(false)></div>
-        <aside class="settings-panel" on:click=|ev| ev.stop_propagation()>
+        <aside class="settings-panel">
             <div class="settings-panel__hdr">
                 <span>"\u{1F464} Persona"</span>
                 <button class="settings-close" on:click=move |_| open.set(false)>"\u{2715}"</button>
