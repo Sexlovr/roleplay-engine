@@ -7,6 +7,24 @@ use shared::types::Character;
 use crate::error::AppError;
 use crate::state::AppState;
 
+/// Max length for an avatar string (plain URL or base64 `data:` URL). Data-URL
+/// avatars are stored inline and echoed in every list payload, so we cap them
+/// to keep the home-page JSON and DB rows from ballooning on the small HF Space.
+const MAX_AVATAR_LEN: usize = 512 * 1024; // ~512 KB
+
+fn check_avatar(avatar: Option<&str>) -> Result<(), AppError> {
+    if let Some(a) = avatar {
+        if a.len() > MAX_AVATAR_LEN {
+            return Err(AppError::BadRequest(format!(
+                "Avatar is too large ({} KB). Please use an image under {} KB, or paste an image URL instead of uploading.",
+                a.len() / 1024,
+                MAX_AVATAR_LEN / 1024
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// GET /api/characters — list all characters, newest first.
 pub async fn list(State(state): State<AppState>) -> Result<Json<Vec<Character>>, AppError> {
     let pool = state.pool.clone();
@@ -53,6 +71,7 @@ pub async fn create(
 ) -> Result<Json<Character>, AppError> {
     let pool = state.pool.clone();
     tokio::task::spawn_blocking(move || -> Result<Json<Character>, AppError> {
+        check_avatar(body.avatar.as_deref())?;
         let conn = pool.get()?;
         let tags =
             serde_json::to_string(&body.tags.as_deref().unwrap_or(&vec![])).unwrap_or_default();
@@ -97,6 +116,7 @@ pub async fn update(
 ) -> Result<Json<Character>, AppError> {
     let pool = state.pool.clone();
     tokio::task::spawn_blocking(move || -> Result<Json<Character>, AppError> {
+        check_avatar(body.avatar.as_deref())?;
         let conn = pool.get()?;
         // Fetch current first.
         let mut c = conn.query_row(

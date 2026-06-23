@@ -14,6 +14,73 @@ use shared::dto::MessageView;
 use crate::api;
 use crate::Page;
 
+/// A piece of a parsed message: either a run of text or an inline image URL.
+enum Segment {
+    Text(String),
+    Image(String),
+}
+
+/// Split message text into text/image segments, recognizing `![alt](url)`.
+fn parse_segments(text: &str) -> Vec<Segment> {
+    let mut out: Vec<Segment> = Vec::new();
+    let mut rest = text;
+    loop {
+        let Some(start) = rest.find("![") else {
+            if !rest.is_empty() {
+                out.push(Segment::Text(rest.to_string()));
+            }
+            break;
+        };
+        // Text before the marker.
+        if start > 0 {
+            out.push(Segment::Text(rest[..start].to_string()));
+        }
+        let after_bang = &rest[start + 2..];
+        let Some(bracket) = after_bang.find("](") else {
+            out.push(Segment::Text("![".to_string()));
+            rest = &rest[start + 2..];
+            continue;
+        };
+        let url_start = start + 2 + bracket + 2;
+        let after_paren = &rest[url_start..];
+        let Some(close) = after_paren.find(')') else {
+            out.push(Segment::Text("![".to_string()));
+            rest = &rest[start + 2..];
+            continue;
+        };
+        let url = after_paren[..close].trim();
+        if !url.is_empty() {
+            out.push(Segment::Image(url.to_string()));
+        }
+        rest = &after_paren[close + 1..];
+    }
+    out
+}
+
+/// Render message text, converting `![](url)` to inline images.
+fn render_text(text: &str) -> AnyView {
+    let segments = parse_segments(text);
+    // Fast path: no images → plain text (preserves whitespace via CSS).
+    if segments.len() == 1 {
+        if let Some(Segment::Text(t)) = segments.first() {
+            return view! { <span class="msg__text">{t.clone()}</span> }.into_any();
+        }
+    }
+    if segments.is_empty() {
+        return view! { <span class="msg__text">{text.to_string()}</span> }.into_any();
+    }
+    segments
+        .into_iter()
+        .map(|seg| match seg {
+            Segment::Text(t) => view! { <span class="msg__text">{t}</span> }.into_any(),
+            Segment::Image(url) => {
+                view! { <img class="msg__img" src=url alt="image" loading="lazy" /> }.into_any()
+            }
+        })
+        .collect_view()
+        .into_any()
+}
+
 #[component]
 pub fn Chat(id: i64) -> impl IntoView {
     let page = use_context::<RwSignal<Page>>().unwrap();
@@ -80,7 +147,7 @@ pub fn Chat(id: i64) -> impl IntoView {
         sending.set(true);
 
         spawn_local(async move {
-            let res = api::send_message(id, text).await;
+            let res = api::send_message(id, text.clone()).await;
             sending.set(false);
             messages.update(|l| {
                 // Remove the placeholder.
@@ -94,6 +161,8 @@ pub fn Chat(id: i64) -> impl IntoView {
                     }
                     Err(e) => {
                         l.push(MessageView { id: -2, from_user: false, text: format!("\u{26A0} {e}") });
+                        // Restore the user's text so it isn't lost — they can retry.
+                        draft.set(text);
                     }
                 }
             });
@@ -137,13 +206,34 @@ pub fn Chat(id: i64) -> impl IntoView {
             editing.set(None);
             return;
         }
-        // Optimistic local update.
+        // Snapshot prior text so we can roll back if the server rejects the edit.
+        let prev = messages.with_untracked(|l| {
+            l.iter().find(|m| m.id == msg_id).map(|m| m.text.clone())
+        });
+        // Optimistic local update...
         messages.update(|l| {
             if let Some(m) = l.iter_mut().find(|m| m.id == msg_id) {
-                m.text = text;
+                m.text = text.clone();
             }
         });
         editing.set(None);
+        // ...then persist; roll back + surface the error on failure.
+        spawn_local(async move {
+            if let Err(e) = api::edit_message(msg_id, text).await {
+                if let Some(prev) = prev {
+                    messages.update(|l| {
+                        if let Some(m) = l.iter_mut().find(|m| m.id == msg_id) {
+                            m.text = prev;
+                        }
+                    });
+                }
+                messages.update(|l| l.push(MessageView {
+                    id: -2,
+                    from_user: false,
+                    text: format!("\u{26A0} edit failed: {e}"),
+                }));
+            }
+        });
     };
 
     let do_delete = move |msg_id: i64| {
@@ -203,7 +293,7 @@ pub fn Chat(id: i64) -> impl IntoView {
                         </div>
                     }.into_any()
                 } else {
-                    view! { <div class="msg__bubble">{text}</div> }.into_any()
+                    view! { <div class="msg__bubble">{render_text(&text)}</div> }.into_any()
                 };
 
                 let actions = (!is_placeholder && !is_error).then(|| view! {

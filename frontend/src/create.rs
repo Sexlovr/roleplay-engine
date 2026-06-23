@@ -137,10 +137,38 @@ pub fn Create() -> impl IntoView {
                             on:input=move |ev| tagline.set(event_target_value(&ev)) />
                     </label>
                     <label class="settings-row">
-                        <span>"Avatar URL"</span>
-                        <input class="field" placeholder="https://i.pravatar.cc/400?img=12"
-                            prop:value=move || avatar.get()
-                            on:input=move |ev| avatar.set(event_target_value(&ev)) />
+                        <span>"Avatar image"<small>" — upload a file, or paste a direct image URL"</small></span>
+                        <div class="avatar-input">
+                            <label class="avatar-upload">
+                                "\u{1F4F7} Upload"
+                                <input type="file" accept="image/*" class="avatar-file"
+                                    on:change=move |ev| {
+                                        use wasm_bindgen::JsCast;
+                                        let target = ev.target().unwrap();
+                                        let input: web_sys::HtmlInputElement = target.unchecked_into();
+                                        if let Some(files) = input.files() {
+                                            if let Some(file) = files.get(0) {
+                                                // Guard size client-side too (~512KB; backend hard-caps).
+                                                if file.size() > 512.0 * 1024.0 {
+                                                    error.set("That image is over 512 KB — pick a smaller file or paste an image URL instead.".to_string());
+                                                } else {
+                                                    error.set(String::new());
+                                                    crate::upload::read_as_data_url(file, move |res| {
+                                                        match res {
+                                                            Ok(data_url) => avatar.set(data_url),
+                                                            Err(e) => error.set(format!("Upload failed: {e}")),
+                                                        }
+                                                    });
+                                                }
+                                            }
+                                        }
+                                    } />
+                            </label>
+                            <input class="field" type="url" inputmode="url"
+                                placeholder="…or https://i.pravatar.cc/400?img=12"
+                                prop:value=move || avatar.get()
+                                on:input=move |ev| avatar.set(event_target_value(&ev)) />
+                        </div>
                     </label>
                     <label class="settings-row">
                         <span>"Creator handle"</span>

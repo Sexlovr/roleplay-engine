@@ -9,7 +9,7 @@ mod llm;
 mod routes;
 mod state;
 
-use axum::{http::StatusCode, routing::get, Router};
+use axum::{extract::DefaultBodyLimit, http::StatusCode, routing::get, Router};
 use state::AppState;
 use tower_http::services::{ServeDir, ServeFile};
 
@@ -102,6 +102,10 @@ async fn main() {
         )
         // Health-check helper that always returns OK (useful for reverse proxies).
         .route("/healthz", get(|| async { StatusCode::OK }))
+        // Allow up to ~1.5 MB request bodies so base64 data-URL avatars (capped
+        // at ~512 KB in the handler, but base64-inflated) aren't rejected by the
+        // 2 MB default before reaching the size check.
+        .layer(DefaultBodyLimit::max(1_500_000))
         .with_state(state)
         .fallback_service(serve_dir);
 

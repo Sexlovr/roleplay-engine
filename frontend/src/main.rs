@@ -13,6 +13,7 @@ mod header;
 mod home;
 mod persona;
 mod settings;
+mod upload;
 
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;

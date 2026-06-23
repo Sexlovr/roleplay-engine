@@ -13,6 +13,7 @@
 //!
 //! ## Placeholders (substituted in url, header values, and body)
 //!   `{{api_key}}` `{{model}}` `{{temperature}}` `{{max_tokens}}`
+//!   `{{context_tokens}}` — the configured context window (0 = unlimited)
 //!   `{{prompt}}`  — latest user message, JSON-escaped (no surrounding quotes)
 //!   `{{system}}`  — system prompt, JSON-escaped (no surrounding quotes)
 //!   `{{messages}}` — OpenAI-shaped array `[{"role","content"}...]` (no system)
@@ -42,6 +43,14 @@ pub struct ProxyConfig {
     pub response_path: String,
     pub temperature: f32,
     pub max_tokens: u32,
+    /// Context window in tokens. 0 = unlimited (the backend will not truncate).
+    /// `#[serde(default)]` keeps older saved configs (without this field)
+    /// loadable after an upgrade.
+    #[serde(default)]
+    pub context_tokens: i64,
+    /// When true, `api_key` is a comma-separated list; the backend picks one per request.
+    #[serde(default)]
+    pub multi_key: bool,
 }
 
 impl Default for ProxyConfig {
@@ -59,6 +68,8 @@ impl Default for ProxyConfig {
             response_path: "choices.0.message.content".into(),
             temperature: 0.8,
             max_tokens: 600,
+            context_tokens: 0, // unlimited
+            multi_key: false,
         }
     }
 }
@@ -74,6 +85,8 @@ impl ProxyConfig {
             )],
             body_template: "{\n  \"model\": \"{{model}}\",\n  \"messages\": {{messages_system}},\n  \"temperature\": {{temperature}},\n  \"max_tokens\": {{max_tokens}}\n}".into(),
             response_path: "choices.0.message.content".into(),
+            context_tokens: 0,
+            multi_key: false,
             ..Default::default()
         }
     }
@@ -87,6 +100,8 @@ impl ProxyConfig {
             ],
             body_template: "{\n  \"model\": \"{{model}}\",\n  \"max_tokens\": {{max_tokens}},\n  \"temperature\": {{temperature}},\n  \"system\": \"{{system}}\",\n  \"messages\": {{messages}}\n}".into(),
             response_path: "content.0.text".into(),
+            context_tokens: 0,
+            multi_key: false,
             ..Default::default()
         }
     }
@@ -97,6 +112,8 @@ impl ProxyConfig {
             headers: vec![],
             body_template: "{\n  \"systemInstruction\": { \"parts\": [{ \"text\": \"{{system}}\" }] },\n  \"contents\": [{ \"role\": \"user\", \"parts\": [{ \"text\": \"{{prompt}}\" }] }]\n}".into(),
             response_path: "candidates.0.content.parts.0.text".into(),
+            context_tokens: 0,
+            multi_key: false,
             ..Default::default()
         }
     }
@@ -107,6 +124,8 @@ impl ProxyConfig {
             headers: vec![],
             body_template: "{\n  \"input\": \"{{prompt}}\"\n}".into(),
             response_path: "output".into(),
+            context_tokens: 0,
+            multi_key: false,
             ..Default::default()
         }
     }
@@ -159,6 +178,7 @@ pub fn fill(
         .replace("{{model}}", &cfg.model)
         .replace("{{temperature}}", &cfg.temperature.to_string())
         .replace("{{max_tokens}}", &cfg.max_tokens.to_string())
+        .replace("{{context_tokens}}", &cfg.context_tokens.to_string())
         .replace("{{messages_system}}", messages_system)
         .replace("{{messages}}", messages)
         .replace("{{system}}", &esc(system))

@@ -46,6 +46,31 @@ pub async fn put_settings(
                             proxy.api_key = old.api_key;
                         }
                     }
+                    // If multi-key was turned OFF but the preserved/stored key is
+                    // still a comma list, collapse it to the first key so it isn't
+                    // sent verbatim (which would break auth).
+                    if !proxy.multi_key && proxy.api_key.contains(',') {
+                        if let Some(first) = proxy
+                            .api_key
+                            .split(',')
+                            .map(str::trim)
+                            .find(|s| !s.is_empty())
+                        {
+                            proxy.api_key = first.to_string();
+                        }
+                    }
+                    // Default to OpenAI-compatible when a URL is provided but
+                    // no body template has been configured yet (blank preset).
+                    if !proxy.url.trim().is_empty() && proxy.body_template.trim().is_empty() {
+                        let openai = ProxyConfig::openai();
+                        proxy.body_template = openai.body_template;
+                        if proxy.response_path.trim().is_empty() {
+                            proxy.response_path = openai.response_path;
+                        }
+                        if proxy.headers.is_empty() {
+                            proxy.headers = openai.headers;
+                        }
+                    }
                     let json = serde_json::to_string(&proxy)?;
                     conn.execute(
                         "INSERT OR REPLACE INTO settings (key, value) VALUES ('proxy_config', ?1)",

@@ -1,13 +1,22 @@
 :root {
-  --bg: #1a1a2e;
-  --surface: #1e1e38;
-  --surface-2: #14142a;
-  --border: #2a2a4a;
-  --text: rgba(255, 255, 255, 0.92);
-  --muted: #a8a4be;
+  /* Pitch black base with glass-morphism surfaces. */
+  --bg: #000000;
+  --bg-2: #050507;
+  /* Translucent "glass" panels — frosted over the black backdrop. */
+  --surface: rgba(255, 255, 255, 0.045);
+  --surface-2: rgba(255, 255, 255, 0.025);
+  --surface-strong: rgba(20, 20, 26, 0.72);
+  --border: rgba(255, 255, 255, 0.1);
+  --border-strong: rgba(255, 255, 255, 0.18);
+  --text: rgba(255, 255, 255, 0.94);
+  --muted: rgba(255, 255, 255, 0.5);
   --accent: #f786f4;
   --accent-2: #f9a8f6;
-  --radius: 10px;
+  --accent-soft: rgba(247, 134, 244, 0.14);
+  --radius: 14px;
+  --radius-sm: 10px;
+  --glass-blur: 18px;
+  --shadow: 0 18px 50px -20px rgba(0, 0, 0, 0.9);
 }
 
 * {
@@ -22,6 +31,12 @@ body {
 
 body {
   background: var(--bg);
+  /* Subtle radial glows give the pitch-black canvas depth behind the glass. */
+  background-image:
+    radial-gradient(60rem 60rem at 12% -10%, rgba(247, 134, 244, 0.08), transparent 60%),
+    radial-gradient(50rem 50rem at 100% 0%, rgba(120, 90, 240, 0.07), transparent 55%),
+    radial-gradient(70rem 40rem at 50% 120%, rgba(247, 134, 244, 0.05), transparent 60%);
+  background-attachment: fixed;
   color: var(--text);
   font-family: Inter, system-ui, sans-serif;
   line-height: 1.5;
@@ -70,7 +85,7 @@ button {
 }
 
 *::-webkit-scrollbar-thumb:hover {
-  background: #34343f;
+  background: rgba(255, 255, 255, 0.14);
   background-clip: padding-box;
   border: 2px solid transparent;
 }
@@ -82,9 +97,9 @@ button {
   position: sticky;
   top: 0;
   z-index: 50;
-  background: rgba(26, 26, 46, 0.72);
-  backdrop-filter: saturate(160%) blur(14px);
-  -webkit-backdrop-filter: saturate(160%) blur(14px);
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: saturate(150%) blur(var(--glass-blur));
+  -webkit-backdrop-filter: saturate(150%) blur(var(--glass-blur));
   border-bottom: 1px solid var(--border);
 }
 
@@ -115,8 +130,10 @@ button {
 .header__search {
   flex: 1;
   min-width: 0;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: 1px solid var(--border-strong);
   color: var(--text);
   padding: 10px 16px;
   border-radius: 999px;
@@ -131,7 +148,7 @@ button {
 
 .header__search:focus {
   border-color: var(--accent);
-  background: var(--surface);
+  background: rgba(255, 255, 255, 0.06);
   box-shadow: 0 0 0 3px rgba(247, 134, 244, 0.25);
 }
 
@@ -162,8 +179,8 @@ button {
 }
 
 .btn:hover {
-  border-color: #34343f;
-  background: #24242b;
+  border-color: rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.08);
 }
 
 .btn:active {
@@ -298,20 +315,24 @@ button {
 
 .card {
   background: var(--surface);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
   border: 1px solid var(--border);
   border-radius: var(--radius);
   overflow: hidden;
   cursor: pointer;
   display: flex;
   flex-direction: column;
-  transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+  transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease,
+    background-color 0.2s ease;
 }
 
 .card:hover {
   transform: translateY(-4px);
-  border-color: var(--accent);
-  box-shadow: 0 14px 34px -14px rgba(247, 134, 244, 0.45),
-    0 6px 18px -10px rgba(0, 0, 0, 0.6);
+  border-color: var(--border-strong);
+  background: rgba(255, 255, 255, 0.07);
+  box-shadow: 0 18px 40px -16px rgba(247, 134, 244, 0.35),
+    0 8px 22px -12px rgba(0, 0, 0, 0.8);
 }
 
 .card__img {
@@ -411,7 +432,9 @@ button {
   align-items: center;
   gap: 12px;
   padding: 12px 4px;
-  background: var(--bg);
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
   border-bottom: 1px solid var(--border);
 }
 
@@ -435,7 +458,7 @@ button {
 
 .chat__back:hover {
   border-color: var(--accent);
-  background: #24242b;
+  background: rgba(255, 255, 255, 0.08);
 }
 
 .chat__avatar {
@@ -515,11 +538,30 @@ button {
   line-height: 1.5;
   word-wrap: break-word;
   overflow-wrap: anywhere;
+}
+
+/* Text segments preserve newlines; images sit between them as blocks. */
+.msg__text {
   white-space: pre-wrap;
 }
 
+.msg__img {
+  display: block;
+  max-width: 100%;
+  max-height: 380px;
+  width: auto;
+  height: auto;
+  border-radius: var(--radius-sm);
+  margin: 6px 0;
+  border: 1px solid var(--border);
+  object-fit: contain;
+  background: rgba(0, 0, 0, 0.3);
+}
+
 .msg--bot .msg__bubble {
-  background: var(--surface-2);
+  background: rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
   border: 1px solid var(--border);
   border-bottom-left-radius: 4px;
   color: var(--text);
@@ -527,7 +569,7 @@ button {
 
 .msg--user .msg__bubble {
   background: var(--accent);
-  color: #0e0820;
+  color: #160a16;
   border-bottom-right-radius: 4px;
   font-weight: 500;
 }
@@ -539,17 +581,17 @@ button {
   align-items: center;
   gap: 10px;
   padding: 12px 4px;
-  background: rgba(14, 14, 16, 0.85);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  background: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
   border-top: 1px solid var(--border);
 }
 
 .chat__composer .chat__input {
   flex: 1;
   min-width: 0;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--border-strong);
   color: var(--text);
   font-family: inherit;
   font-size: 0.95rem;
@@ -689,7 +731,7 @@ button {
 }
 .charpage__back:hover {
   border-color: var(--accent);
-  background: #24242b;
+  background: rgba(255, 255, 255, 0.08);
 }
 
 .charpage__grid {
@@ -827,7 +869,7 @@ button {
 }
 .def__body {
   padding: 0 16px 16px;
-  color: var(--muted);
+  color: var(--text);
   line-height: 1.6;
   white-space: pre-wrap;
 }
@@ -856,7 +898,7 @@ button {
   font-size: 0.85rem;
 }
 .comment__text {
-  color: var(--muted);
+  color: var(--text);
   font-size: 0.92rem;
   line-height: 1.5;
 }
@@ -893,15 +935,16 @@ button {
 }
 .chat__model:hover {
   border-color: var(--accent);
-  background: #24242b;
+  background: rgba(255, 255, 255, 0.08);
 }
 
 .settings-backdrop {
   position: fixed;
   inset: 0;
   z-index: 90;
-  background: rgba(0, 0, 0, 0.55);
-  backdrop-filter: blur(2px);
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
 }
 .settings-panel {
   position: fixed;
@@ -911,9 +954,11 @@ button {
   width: min(460px, 100vw);
   height: 100vh;
   height: 100dvh;
-  background: var(--surface);
-  border-left: 1px solid var(--border);
-  box-shadow: -20px 0 50px -20px rgba(0, 0, 0, 0.7);
+  background: var(--surface-strong);
+  backdrop-filter: saturate(140%) blur(28px);
+  -webkit-backdrop-filter: saturate(140%) blur(28px);
+  border-left: 1px solid var(--border-strong);
+  box-shadow: -20px 0 60px -20px rgba(0, 0, 0, 0.9);
   display: flex;
   flex-direction: column;
   animation: slidein 0.18s ease;
@@ -996,14 +1041,18 @@ button {
 }
 .field {
   width: 100%;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--border-strong);
   color: var(--text);
   border-radius: 10px;
   padding: 10px 12px;
   outline: none;
   font-size: 0.9rem;
-  transition: border-color 0.18s ease, box-shadow 0.18s ease;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease,
+    background-color 0.18s ease;
+}
+.field:hover {
+  border-color: rgba(255, 255, 255, 0.26);
 }
 .field:focus {
   border-color: var(--accent);
@@ -1041,11 +1090,59 @@ button {
 }
 .settings-actions {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
   gap: 10px;
   padding: 14px 18px;
   border-top: 1px solid var(--border);
 }
+
+/* Inline error shown in the settings drawer when a save fails. */
+.settings-error {
+  flex-basis: 100%;
+  background: rgba(247, 134, 244, 0.12);
+  border: 1px solid var(--accent);
+  color: var(--accent-2);
+  padding: 9px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 0.85rem;
+  line-height: 1.4;
+}
+.settings-row--check {
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+}
+.settings-row--check input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.settings-row--check > span {
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+/* Advanced disclosure toggle inside the settings drawer. */
+.advanced-toggle {
+  appearance: none;
+  align-self: flex-start;
+  background: transparent;
+  border: none;
+  color: var(--accent-2);
+  font-weight: 700;
+  font-size: 0.88rem;
+  padding: 4px 0;
+  cursor: pointer;
+  transition: color 0.18s ease;
+}
+.advanced-toggle:hover {
+  color: var(--accent);
+}
+
 @media (max-width: 520px) {
   .settings-panel {
     width: 100vw;
@@ -1105,7 +1202,7 @@ button {
 }
 .pager__btn:hover:not(:disabled) {
   border-color: var(--accent);
-  background: #24242b;
+  background: rgba(255, 255, 255, 0.08);
 }
 .pager__btn:disabled {
   opacity: 0.4;
@@ -1138,7 +1235,7 @@ button {
 }
 .chat__menubtn:hover {
   border-color: var(--accent);
-  background: #24242b;
+  background: rgba(255, 255, 255, 0.08);
 }
 .menu-backdrop {
   position: fixed;
@@ -1154,10 +1251,12 @@ button {
   display: flex;
   flex-direction: column;
   padding: 6px;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
+  background: var(--surface-strong);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid var(--border-strong);
   border-radius: 12px;
-  box-shadow: 0 16px 40px -16px rgba(0, 0, 0, 0.7);
+  box-shadow: 0 16px 40px -16px rgba(0, 0, 0, 0.9);
 }
 .chat__menu button {
   appearance: none;
@@ -1290,6 +1389,39 @@ button {
   border-radius: var(--radius);
   font-size: 0.88rem;
   line-height: 1.4;
+}
+
+/* Avatar upload + URL row in the create form. */
+.avatar-input {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+.avatar-input .field {
+  flex: 1;
+  min-width: 0;
+}
+.avatar-upload {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  background: var(--accent-soft);
+  border: 1px solid var(--border-strong);
+  color: var(--text);
+  font-weight: 600;
+  font-size: 0.85rem;
+  padding: 0 14px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: border-color 0.18s ease, background-color 0.18s ease;
+}
+.avatar-upload:hover {
+  border-color: var(--accent);
+  background: rgba(247, 134, 244, 0.2);
+}
+.avatar-file {
+  display: none;
 }
 
 /* ============================================================

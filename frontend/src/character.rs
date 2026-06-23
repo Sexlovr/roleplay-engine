@@ -53,7 +53,11 @@ pub fn CharacterPage(id: i64) -> impl IntoView {
                 let greeting = if c.first_message.is_empty() { &c.tagline } else { &c.first_message };
                 let description = &c.description;
                 let scenario = &c.scenario;
-                let avatar = c.avatar.clone();
+                let avatar = if c.avatar.is_empty() {
+                    "https://picsum.photos/seed/empty/400/533".to_string()
+                } else {
+                    c.avatar.clone()
+                };
                 let tags = c.tags.clone();
                 let chats = compact(c.messages);
                 let likes = compact(c.likes);
