@@ -2,8 +2,9 @@
 //!
 //! All data lives in the backend (SQLite via `/api/*`); this crate is a thin
 //! reactive client. Navigation is a single `RwSignal<Page>` in context (no
-//! router). Settings + persona are loaded from `/api/settings` once at startup
-//! and held in context so the header, chat, and drawers stay in sync.
+//! router). Settings + personas are loaded from `/api/settings` once at startup
+//! and the *active* proxy + persona are held in context so the header, chat,
+//! and drawers stay in sync.
 
 mod api;
 mod character;
@@ -11,6 +12,7 @@ mod chat;
 mod create;
 mod header;
 mod home;
+mod markdown;
 mod persona;
 mod settings;
 mod upload;
@@ -36,6 +38,7 @@ pub enum Page {
     Character(i64), // character id — detail page
     Chat(i64),      // chat id (a started conversation)
     Create,
+    Edit(i64), // edit an existing character
 }
 
 /// Newtype wrappers so contexts of the same primitive type don't collide.
@@ -43,8 +46,9 @@ pub enum Page {
 pub struct SearchQuery(pub RwSignal<String>);
 #[derive(Copy, Clone)]
 pub struct NsfwEnabled(pub RwSignal<bool>);
-/// The saved proxy config (mirrors the server; `api_key` is blank here — the
-/// real key lives only in the DB). Whether a key is set is tracked separately.
+/// The *active* proxy config (mirrors the server; `api_key` is blank here — the
+/// real key lives only in the DB). Drives the header label; the Settings drawer
+/// owns the full multi-config store.
 #[derive(Copy, Clone)]
 pub struct ApiConfig(pub RwSignal<ProxyConfig>);
 #[derive(Copy, Clone)]
@@ -52,7 +56,7 @@ pub struct HasApiKey(pub RwSignal<bool>);
 /// Whether the API Settings drawer is open.
 #[derive(Copy, Clone)]
 pub struct SettingsOpen(pub RwSignal<bool>);
-/// The user's persona (mirrors the server).
+/// The user's *active* persona (mirrors the server).
 #[derive(Copy, Clone)]
 pub struct PersonaCtx(pub RwSignal<Persona>);
 /// Whether the persona editor drawer is open.
@@ -75,12 +79,23 @@ fn App() -> impl IntoView {
     provide_context(PersonaCtx(persona));
     provide_context(PersonaOpen(RwSignal::new(false)));
 
-    // Load settings from the server once at startup.
+    // Load settings from the server once at startup; surface the active proxy +
+    // persona into context.
     spawn_local(async move {
         if let Ok(s) = api::get_settings().await {
-            cfg.set(s.proxy);
-            has_key.set(s.has_api_key);
-            persona.set(s.persona);
+            if let Some(active) = s.proxy.active_config() {
+                cfg.set(active.clone());
+                has_key.set(s.proxy_has_key.contains(&active.id));
+            }
+            if let Some(p) = s
+                .personas
+                .personas
+                .iter()
+                .find(|p| p.id == s.personas.active)
+                .or_else(|| s.personas.personas.first())
+            {
+                persona.set(p.clone());
+            }
         }
     });
 
@@ -94,7 +109,8 @@ fn App() -> impl IntoView {
                 Page::Home => view! { <Home/> }.into_any(),
                 Page::Character(id) => view! { <CharacterPage id=id/> }.into_any(),
                 Page::Chat(id) => view! { <Chat id=id/> }.into_any(),
-                Page::Create => view! { <Create/> }.into_any(),
+                Page::Create => view! { <Create edit_id=None/> }.into_any(),
+                Page::Edit(id) => view! { <Create edit_id=Some(id)/> }.into_any(),
             }}
         </main>
         {move || settings_open.get().then(|| view! { <settings::Settings/> })}

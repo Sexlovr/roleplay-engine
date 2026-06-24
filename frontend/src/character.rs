@@ -112,6 +112,9 @@ pub fn CharacterPage(id: i64) -> impl IntoView {
                                         >
                                             {move || if starting.get() { "Starting\u{2026}".to_string() } else { format!("Chat with {}", c.name.clone()) }}
                                         </button>
+                                        <button class="charpage__edit" on:click=move |_| page.set(Page::Edit(id))>
+                                            "\u{270E} Edit character"
+                                        </button>
                                     </div>
                                 </div>
                             </aside>

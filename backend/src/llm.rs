@@ -8,8 +8,7 @@
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
 use shared::template::{self, ChatMessage, ProxyConfig, RenderedRequest};
-
-use crate::error::AppError;
+use shared::types::{Character, Persona};
 
 /// Rough token estimate per word (used when truncating history to fit the
 /// context window). ~1.3 tokens per whitespace-delimited word covers most
@@ -65,72 +64,136 @@ fn truncate_history(history: &[ChatMessage], limit: i64) -> Vec<ChatMessage> {
 /// as comma-separated keys and one is selected (cheap time-based rotation).
 /// Always trims the selected key so stray whitespace/commas never hit the wire.
 fn resolve_key(cfg: &mut ProxyConfig) {
-    if cfg.multi_key && cfg.api_key.contains(',') {
-        let keys: Vec<&str> = cfg
-            .api_key
-            .split(',')
-            .map(|s| s.trim())
-            .filter(|s| !s.is_empty())
-            .collect();
-        if keys.is_empty() {
-            return; // nothing usable — leave as-is
-        }
-        let idx = if keys.len() > 1 {
-            // Use sub-second nanos as a cheap random index (no rand dep needed).
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.subsec_nanos() as usize % keys.len())
-                .unwrap_or(0)
-        } else {
-            0
-        };
-        // Always reassign so a single surviving key (e.g. "sk-abc,") is trimmed.
-        cfg.api_key = keys[idx].to_string();
+    if !cfg.api_key.contains(',') {
+        return; // plain single key — leave as-is
     }
+    let keys: Vec<&str> = cfg
+        .api_key
+        .split(',')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if keys.is_empty() {
+        return; // nothing usable — leave as-is
+    }
+    // `multi_key` rotates across the list. With multi_key off the key may still
+    // be a comma list (a preserved list whose owner toggled rotation off) — pick
+    // the first so a comma-joined string never hits the wire as a single key.
+    let idx = if cfg.multi_key && keys.len() > 1 {
+        // Use sub-second nanos as a cheap random index (no rand dep needed).
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.subsec_nanos() as usize % keys.len())
+            .unwrap_or(0)
+    } else {
+        0
+    };
+    cfg.api_key = keys[idx].to_string();
 }
 
-/// Load the full proxy config from the settings table. Returns a default if
-/// none has been saved yet (empty url — callers should check).
-fn load_config(pool: &Pool<SqliteConnectionManager>) -> Result<ProxyConfig, AppError> {
-    let conn = pool.get()?;
-    let raw: Option<String> = conn
-        .query_row("SELECT value FROM settings WHERE key='proxy_config'", [], |row| {
-            row.get(0)
+
+/// Append a labelled, non-empty section to the system prompt.
+fn section(buf: &mut String, label: &str, body: &str) {
+    let body = body.trim();
+    if body.is_empty() {
+        return;
+    }
+    buf.push_str("\n\n");
+    buf.push_str(label);
+    buf.push('\n');
+    buf.push_str(body);
+}
+
+/// Select lorebook entries relevant to the recent conversation. Keyless entries
+/// are always included ("constant"); keyed entries fire when any key appears in
+/// the recent text (case-insensitive). Disabled entries are skipped.
+fn active_lore(character: &Character, history: &[ChatMessage]) -> Vec<String> {
+    if character.lorebook.is_empty() {
+        return Vec::new();
+    }
+    // Scan a window of the most recent turns for key matches.
+    let recent: String = history
+        .iter()
+        .rev()
+        .take(8)
+        .map(|m| m.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n")
+        .to_lowercase();
+    character
+        .lorebook
+        .iter()
+        .filter(|e| e.enabled && !e.content.trim().is_empty())
+        .filter(|e| {
+            e.keys.is_empty()
+                || e.keys
+                    .iter()
+                    .any(|k| !k.trim().is_empty() && recent.contains(&k.to_lowercase()))
         })
-        .optional()?;
-    match raw {
-        Some(json) => Ok(serde_json::from_str(&json)?),
-        None => Ok(ProxyConfig::default()),
-    }
+        .map(|e| e.content.trim().to_string())
+        .collect()
 }
 
-/// Build the system prompt for a chat (character + persona + memory).
+/// Build the full system prompt from the character card, the active persona,
+/// the chat memory, and any triggered lorebook entries. This is what makes
+/// characters actually *work* — the whole card (personality, scenario,
+/// description, example dialogue) is sent, not just the name. The proxy-level
+/// custom prompt is prepended later, inside [`complete`].
 pub fn build_system(
-    char_name: &str,
-    char_tagline: &str,
-    persona_name: &str,
-    persona_desc: &str,
+    character: &Character,
+    persona: &Persona,
     memory: &str,
+    history: &[ChatMessage],
 ) -> String {
-    let mut s = format!(
-        "You are {char_name}, a roleplay character. {char_tagline}\n\nStay fully in \
-         character as {char_name}: write vivid, immersive, in-character replies \
-         and never mention being an AI."
-    );
-    if !persona_name.trim().is_empty() || !persona_desc.trim().is_empty() {
-        let who = if persona_name.trim().is_empty() {
+    let name = &character.name;
+    let mut s = String::new();
+
+    // Character-level system prompt overrides the generic framing when present.
+    if !character.system_prompt.trim().is_empty() {
+        s.push_str(character.system_prompt.trim());
+    } else {
+        s.push_str(&format!(
+            "You are {name}, a fictional roleplay character. Stay fully in character \
+             as {name}: write vivid, immersive, in-character replies that move the \
+             scene forward, and never break character or mention being an AI."
+        ));
+    }
+
+    if !character.tagline.trim().is_empty() {
+        section(&mut s, &format!("# {name} — summary"), &character.tagline);
+    }
+    section(&mut s, &format!("# {name}'s personality"), &character.personality);
+    section(&mut s, &format!("# About {name}"), &character.description);
+    section(&mut s, "# Scenario", &character.scenario);
+    section(&mut s, "# Example dialogue", &character.mes_example);
+
+    // Persona — who the user is.
+    if !persona.name.trim().is_empty() || !persona.description.trim().is_empty() {
+        let who = if persona.name.trim().is_empty() {
             "the user".to_string()
         } else {
-            persona_name.to_string()
+            persona.name.clone()
         };
-        s.push_str(&format!("\n\nThe user is roleplaying as {who}."));
-        if !persona_desc.trim().is_empty() {
-            s.push_str(&format!(" {}", persona_desc));
+        let mut body = format!("The user is roleplaying as {who}.");
+        if !persona.description.trim().is_empty() {
+            body.push(' ');
+            body.push_str(persona.description.trim());
         }
+        section(&mut s, "# Your scene partner", &body);
     }
-    if !memory.trim().is_empty() {
-        s.push_str(&format!("\n\nImportant context to remember:\n{memory}"));
+
+    // Triggered lorebook / world-info.
+    let lore = active_lore(character, history);
+    if !lore.is_empty() {
+        section(&mut s, "# World info", &lore.join("\n\n"));
     }
+
+    // Chat memory — user-curated facts.
+    section(&mut s, "# Important context to remember", memory);
+
+    // NOTE: post_history_instructions (jailbreak / UJB) are deliberately NOT
+    // appended here — they are passed separately to `complete` so the templating
+    // layer can place them *after* the chat history (strongest recency).
     s
 }
 
@@ -179,27 +242,34 @@ pub async fn complete(
     client: &reqwest::Client,
     history: &[ChatMessage],
     system: &str,
+    post_history: &str,
 ) -> Result<String, String> {
-    let mut cfg = load_config(pool).map_err(|e| format!("load config: {e}"))?;
+    let mut cfg = crate::routes::settings::load_active_proxy(pool);
     if cfg.url.trim().is_empty() {
         return Err("No API endpoint configured. Open Settings to point me at your proxy/API.".into());
     }
+    // Prepend the proxy-level custom prompt (JAI "Custom Prompt") if set.
+    let system: String = if cfg.system_prompt.trim().is_empty() {
+        system.to_string()
+    } else {
+        format!("{}\n\n{}", cfg.system_prompt.trim(), system)
+    };
     // Multi-key: pick one key from the comma-separated list.
     resolve_key(&mut cfg);
     // Context window: truncate history if a limit is set, reserving room for
     // the system prompt (character + persona + memory) which is always sent.
+    // Clamp the reservation to the window so an oversize system prompt can't
+    // drive the history budget arbitrarily negative.
     let history = if cfg.context_tokens > 0 {
-        let hist_limit = cfg.context_tokens - est_tokens(system);
+        let sys_tokens = est_tokens(&system).min(cfg.context_tokens);
+        let hist_limit = cfg.context_tokens - sys_tokens;
         truncate_history(history, hist_limit)
     } else {
         history.to_vec()
     };
-    let req = template::build_request(&cfg, &history, system)?;
+    let req = template::build_request(&cfg, &history, &system, post_history)?;
     send_request(client, req, &cfg.response_path).await
 }
-
-// Pull in rusqlite's .optional() extension.
-use rusqlite::OptionalExtension;
 
 #[cfg(test)]
 mod tests {
@@ -263,12 +333,22 @@ mod tests {
     }
 
     #[test]
-    fn resolve_key_noop_when_disabled() {
+    fn resolve_key_single_mode_takes_first() {
         let mut cfg = ProxyConfig::openai();
         cfg.multi_key = false;
         cfg.api_key = "k1,k2".into();
         resolve_key(&mut cfg);
-        // Left untouched when multi_key is off (backend route collapses it on save).
-        assert_eq!(cfg.api_key, "k1,k2");
+        // With multi_key off, a preserved comma list collapses to the first key
+        // for the request so a comma-joined string never hits the wire as one key.
+        assert_eq!(cfg.api_key, "k1");
+    }
+
+    #[test]
+    fn resolve_key_plain_key_untouched() {
+        let mut cfg = ProxyConfig::openai();
+        cfg.multi_key = false;
+        cfg.api_key = "sk-single".into();
+        resolve_key(&mut cfg);
+        assert_eq!(cfg.api_key, "sk-single");
     }
 }

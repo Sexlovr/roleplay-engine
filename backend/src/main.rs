@@ -73,6 +73,10 @@ async fn main() {
             get(routes::characters::list).post(routes::characters::create),
         )
         .route(
+            "/api/characters/import",
+            axum::routing::post(routes::characters::import_card),
+        )
+        .route(
             "/api/characters/{id}",
             get(routes::characters::get_one)
                 .put(routes::characters::update)
@@ -95,6 +99,10 @@ async fn main() {
         .route(
             "/api/messages/{id}",
             axum::routing::put(routes::messages::edit).delete(routes::messages::delete),
+        )
+        .route(
+            "/api/messages/{id}/variant",
+            axum::routing::put(routes::messages::select_variant),
         )
         .route(
             "/api/settings",

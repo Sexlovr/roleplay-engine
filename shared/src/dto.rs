@@ -5,8 +5,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::template::ProxyConfig;
-use crate::types::{Character, Chat, Persona};
+use crate::template::ProxyStore;
+use crate::types::{Character, Chat, LoreEntry, PersonaStore};
 
 // ---- health ----------------------------------------------------------------
 
@@ -19,7 +19,9 @@ pub struct HealthResp {
 
 // ---- characters ------------------------------------------------------------
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+/// Create/replace payload for a character. The V2/V3 fields are optional so a
+/// minimal V1-style create still works; importers fill in the rest.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct NewCharacterReq {
     pub name: String,
     pub tagline: Option<String>,
@@ -31,9 +33,25 @@ pub struct NewCharacterReq {
     pub tags: Option<Vec<String>>,
     pub creator: Option<String>,
     pub nsfw: Option<bool>,
+    // V2/V3 extensions
+    #[serde(default)]
+    pub spec_version: Option<String>,
+    #[serde(default)]
+    pub creator_notes: Option<String>,
+    #[serde(default)]
+    pub system_prompt: Option<String>,
+    #[serde(default)]
+    pub post_history_instructions: Option<String>,
+    #[serde(default)]
+    pub mes_example: Option<String>,
+    #[serde(default)]
+    pub alternate_greetings: Option<Vec<String>>,
+    #[serde(default)]
+    pub lorebook: Option<Vec<LoreEntry>>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+/// Partial update — every field is optional; `None` leaves the column unchanged.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct UpdateCharacterReq {
     pub name: Option<String>,
     pub tagline: Option<String>,
@@ -45,6 +63,31 @@ pub struct UpdateCharacterReq {
     pub tags: Option<Vec<String>>,
     pub creator: Option<String>,
     pub nsfw: Option<bool>,
+    #[serde(default)]
+    pub spec_version: Option<String>,
+    #[serde(default)]
+    pub creator_notes: Option<String>,
+    #[serde(default)]
+    pub system_prompt: Option<String>,
+    #[serde(default)]
+    pub post_history_instructions: Option<String>,
+    #[serde(default)]
+    pub mes_example: Option<String>,
+    #[serde(default)]
+    pub alternate_greetings: Option<Vec<String>>,
+    #[serde(default)]
+    pub lorebook: Option<Vec<LoreEntry>>,
+}
+
+/// Import a raw character-card JSON (V1/V2/V3 Tavern format). The backend (or a
+/// shared parser) normalizes it into a `NewCharacterReq` and inserts it.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ImportCardReq {
+    /// The raw card JSON as a string (already extracted from PNG client-side).
+    pub json: String,
+    /// Optional avatar override (e.g. the PNG itself as a data-URL).
+    #[serde(default)]
+    pub avatar: Option<String>,
 }
 
 // ---- chats -----------------------------------------------------------------
@@ -67,12 +110,20 @@ pub struct ChatDetail {
 
 /// A persisted message as shown in the chat log. Unlike the bare
 /// [`ChatMessage`] used for LLM templating, this carries the row `id` so the
-/// frontend can edit/delete a specific message via `/api/messages/{id}`.
+/// frontend can edit/delete a specific message via `/api/messages/{id}`, plus
+/// alternate generations (swipes) the user can cycle between.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MessageView {
     pub id: i64,
     pub from_user: bool,
     pub text: String,
+    /// All stored variants for this message (index 0 == `text` unless `variant`
+    /// points elsewhere). Empty for user messages and legacy rows.
+    #[serde(default)]
+    pub variants: Vec<String>,
+    /// Which variant is currently shown.
+    #[serde(default)]
+    pub variant: i64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -98,18 +149,25 @@ pub struct EditMessageReq {
     pub text: String,
 }
 
-// ---- settings --------------------------------------------------------------
-
-/// Settings returned to the frontend — the API key is NEVER included.
+/// Select which stored variant (swipe) of a message is active.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct SettingsResp {
-    pub has_api_key: bool,
-    pub proxy: ProxyConfig, // api_key field is empty in the response
-    pub persona: Persona,
+pub struct SelectVariantReq {
+    pub variant: i64,
 }
 
+// ---- settings --------------------------------------------------------------
+
+/// Settings returned to the frontend. API keys are NEVER included; instead
+/// `proxy_has_key` lists the config ids that currently have a saved key.
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SettingsResp {
+    pub proxy: ProxyStore, // every config's api_key is blanked
+    pub proxy_has_key: Vec<i64>,
+    pub personas: PersonaStore,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct SettingsReq {
-    pub proxy: Option<ProxyConfig>, // None = don't change
-    pub persona: Option<Persona>,
+    pub proxy: Option<ProxyStore>, // None = don't change
+    pub personas: Option<PersonaStore>,
 }

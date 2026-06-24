@@ -12,73 +12,13 @@ use wasm_bindgen_futures::spawn_local;
 use shared::dto::MessageView;
 
 use crate::api;
+use crate::markdown::render_message;
 use crate::Page;
 
-/// A piece of a parsed message: either a run of text or an inline image URL.
-enum Segment {
-    Text(String),
-    Image(String),
-}
-
-/// Split message text into text/image segments, recognizing `![alt](url)`.
-fn parse_segments(text: &str) -> Vec<Segment> {
-    let mut out: Vec<Segment> = Vec::new();
-    let mut rest = text;
-    loop {
-        let Some(start) = rest.find("![") else {
-            if !rest.is_empty() {
-                out.push(Segment::Text(rest.to_string()));
-            }
-            break;
-        };
-        // Text before the marker.
-        if start > 0 {
-            out.push(Segment::Text(rest[..start].to_string()));
-        }
-        let after_bang = &rest[start + 2..];
-        let Some(bracket) = after_bang.find("](") else {
-            out.push(Segment::Text("![".to_string()));
-            rest = &rest[start + 2..];
-            continue;
-        };
-        let url_start = start + 2 + bracket + 2;
-        let after_paren = &rest[url_start..];
-        let Some(close) = after_paren.find(')') else {
-            out.push(Segment::Text("![".to_string()));
-            rest = &rest[start + 2..];
-            continue;
-        };
-        let url = after_paren[..close].trim();
-        if !url.is_empty() {
-            out.push(Segment::Image(url.to_string()));
-        }
-        rest = &after_paren[close + 1..];
-    }
-    out
-}
-
-/// Render message text, converting `![](url)` to inline images.
+/// Render message text as inline markdown (`*em*`, `**strong**`, `` `code` ``,
+/// `> quote`, `![](img)`). Wrapped in `.msg__text` for layout.
 fn render_text(text: &str) -> AnyView {
-    let segments = parse_segments(text);
-    // Fast path: no images → plain text (preserves whitespace via CSS).
-    if segments.len() == 1 {
-        if let Some(Segment::Text(t)) = segments.first() {
-            return view! { <span class="msg__text">{t.clone()}</span> }.into_any();
-        }
-    }
-    if segments.is_empty() {
-        return view! { <span class="msg__text">{text.to_string()}</span> }.into_any();
-    }
-    segments
-        .into_iter()
-        .map(|seg| match seg {
-            Segment::Text(t) => view! { <span class="msg__text">{t}</span> }.into_any(),
-            Segment::Image(url) => {
-                view! { <img class="msg__img" src=url alt="image" loading="lazy" /> }.into_any()
-            }
-        })
-        .collect_view()
-        .into_any()
+    view! { <span class="msg__text">{render_message(text)}</span> }.into_any()
 }
 
 #[component]
@@ -141,9 +81,13 @@ pub fn Chat(id: i64) -> impl IntoView {
         }
         draft.set(String::new());
         // Optimistic: show the user message immediately.
-        messages.update(|l| l.push(MessageView { id: 0, from_user: true, text: text.clone() }));
+        messages.update(|l| l.push(MessageView {
+            id: 0, from_user: true, text: text.clone(), variants: Vec::new(), variant: 0,
+        }));
         // In-flight placeholder.
-        messages.update(|l| l.push(MessageView { id: -1, from_user: false, text: "\u{2026}".into() }));
+        messages.update(|l| l.push(MessageView {
+            id: -1, from_user: false, text: "\u{2026}".into(), variants: Vec::new(), variant: 0,
+        }));
         sending.set(true);
 
         spawn_local(async move {
@@ -160,7 +104,10 @@ pub fn Chat(id: i64) -> impl IntoView {
                         l.push(resp.reply);
                     }
                     Err(e) => {
-                        l.push(MessageView { id: -2, from_user: false, text: format!("\u{26A0} {e}") });
+                        l.push(MessageView {
+                            id: -2, from_user: false, text: format!("\u{26A0} {e}"),
+                            variants: Vec::new(), variant: 0,
+                        });
                         // Restore the user's text so it isn't lost — they can retry.
                         draft.set(text);
                     }
@@ -177,12 +124,18 @@ pub fn Chat(id: i64) -> impl IntoView {
         if !has_user {
             return;
         }
-        // Drop trailing bot message if present.
-        let last_is_bot = messages.with_untracked(|l| l.last().map_or(false, |m| !m.from_user));
-        if last_is_bot {
+        // Stash the trailing bot message so we can restore it on error; show a
+        // placeholder in its place (the server appends a new swipe variant and
+        // returns the same message id).
+        let stashed = messages.with_untracked(|l| {
+            l.last().filter(|m| !m.from_user && m.id > 0).cloned()
+        });
+        if stashed.is_some() {
             messages.update(|l| { l.pop(); });
         }
-        messages.update(|l| l.push(MessageView { id: -1, from_user: false, text: "\u{2026}".into() }));
+        messages.update(|l| l.push(MessageView {
+            id: -1, from_user: false, text: "\u{2026}".into(), variants: Vec::new(), variant: 0,
+        }));
         sending.set(true);
 
         spawn_local(async move {
@@ -193,10 +146,45 @@ pub fn Chat(id: i64) -> impl IntoView {
                 match res {
                     Ok(resp) => l.push(resp.reply),
                     Err(e) => {
-                        l.push(MessageView { id: -2, from_user: false, text: format!("\u{26A0} {e}") });
+                        // Restore the previous reply, then show the error.
+                        if let Some(prev) = stashed {
+                            l.push(prev);
+                        }
+                        l.push(MessageView {
+                            id: -2, from_user: false, text: format!("\u{26A0} {e}"),
+                            variants: Vec::new(), variant: 0,
+                        });
                     }
                 }
             });
+        });
+    };
+
+    // Switch which stored variant (swipe) of a bot message is shown.
+    let do_swipe = move |msg_id: i64, dir: i64| {
+        if sending.get_untracked() || msg_id <= 0 {
+            return;
+        }
+        let target = messages.with_untracked(|l| {
+            l.iter().find(|m| m.id == msg_id).and_then(|m| {
+                let count = m.variants.len() as i64;
+                if count <= 1 {
+                    return None;
+                }
+                let next = (m.variant + dir).rem_euclid(count);
+                Some((next, m.variants[next as usize].clone()))
+            })
+        });
+        let Some((next, text)) = target else { return; };
+        // Optimistic local switch.
+        messages.update(|l| {
+            if let Some(m) = l.iter_mut().find(|m| m.id == msg_id) {
+                m.variant = next;
+                m.text = text;
+            }
+        });
+        spawn_local(async move {
+            let _ = api::select_variant(msg_id, next).await;
         });
     };
 
@@ -231,6 +219,8 @@ pub fn Chat(id: i64) -> impl IntoView {
                     id: -2,
                     from_user: false,
                     text: format!("\u{26A0} edit failed: {e}"),
+                    variants: Vec::new(),
+                    variant: 0,
                 }));
             }
         });
@@ -274,9 +264,15 @@ pub fn Chat(id: i64) -> impl IntoView {
                 let is_error = m.id == -2;
                 let is_editing = editing_id == Some(m.id);
                 let is_last_bot = i == last && !from_user && has_user && !is_error && !is_placeholder;
+                // Swipes don't require a prior user turn, so a fresh chat's
+                // greeting (the last/only bot message) can still cycle its
+                // seeded alternate-greeting variants.
+                let is_swipeable = i == last && !from_user && !is_error && !is_placeholder;
                 let text = m.text.clone();
                 let msg_id = m.id;
                 let edit_seed = m.text.clone();
+                let variant_count = m.variants.len();
+                let variant_idx = m.variant;
 
                 let body = if is_editing {
                     view! {
@@ -296,8 +292,23 @@ pub fn Chat(id: i64) -> impl IntoView {
                     view! { <div class="msg__bubble">{render_text(&text)}</div> }.into_any()
                 };
 
+                // Swipe controls: shown on the last bot message when it has
+                // more than one stored variant.
+                let swipes = (is_swipeable && variant_count > 1).then(|| {
+                    let swipe_l = do_swipe;
+                    let swipe_r = do_swipe;
+                    view! {
+                        <div class="msg__swipe">
+                            <button class="msg__act" title="Previous" on:click=move |_| swipe_l(msg_id, -1)>"\u{2039}"</button>
+                            <span class="msg__swipecount">{format!("{}/{}", variant_idx + 1, variant_count)}</span>
+                            <button class="msg__act" title="Next" on:click=move |_| swipe_r(msg_id, 1)>"\u{203A}"</button>
+                        </div>
+                    }
+                });
+
                 let actions = (!is_placeholder && !is_error).then(|| view! {
                     <div class="msg__actions">
+                        {swipes}
                         {is_last_bot.then(|| {
                             let regen = do_regenerate.clone();
                             view! { <button class="msg__act" title="Regenerate" on:click=move |_| regen()>"\u{21BB}"</button> }

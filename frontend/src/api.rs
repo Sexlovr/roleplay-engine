@@ -11,8 +11,9 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 
 use shared::dto::{
-    ChatDetail, ChatListEntry, EditMessageReq, HealthResp, NewCharacterReq, SendMessageReq,
-    SendMessageResp, SettingsReq, SettingsResp, UpdateMemoryReq,
+    ChatDetail, ChatListEntry, EditMessageReq, HealthResp, ImportCardReq, NewCharacterReq,
+    SelectVariantReq, SendMessageReq, SendMessageResp, SettingsReq, SettingsResp,
+    UpdateCharacterReq, UpdateMemoryReq,
 };
 use shared::types::Character;
 
@@ -114,6 +115,15 @@ pub async fn create_character(req: &NewCharacterReq) -> Result<Character, String
     send_with_body("POST", "/api/characters", req).await
 }
 
+pub async fn update_character(id: i64, req: &UpdateCharacterReq) -> Result<Character, String> {
+    send_with_body("PUT", &format!("/api/characters/{id}"), req).await
+}
+
+/// Import a Tavern V1/V2/V3 card (raw JSON, optionally with an avatar data-URL).
+pub async fn import_character(json: String, avatar: Option<String>) -> Result<Character, String> {
+    send_with_body("POST", "/api/characters/import", &ImportCardReq { json, avatar }).await
+}
+
 pub async fn delete_character(id: i64) -> Result<(), String> {
     delete(&format!("/api/characters/{id}")).await
 }
@@ -162,6 +172,17 @@ pub async fn edit_message(id: i64, text: String) -> Result<(), String> {
 
 pub async fn delete_message(id: i64) -> Result<(), String> {
     delete(&format!("/api/messages/{id}")).await
+}
+
+/// Switch which stored variant (swipe) of a bot message is shown.
+pub async fn select_variant(id: i64, variant: i64) -> Result<(), String> {
+    let _: serde_json::Value = send_with_body(
+        "PUT",
+        &format!("/api/messages/{id}/variant"),
+        &SelectVariantReq { variant },
+    )
+    .await?;
+    Ok(())
 }
 
 // ---- settings ---------------------------------------------------------------

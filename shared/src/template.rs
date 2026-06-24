@@ -33,6 +33,10 @@ pub struct ChatMessage {
 /// the reply text lives in the response JSON.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ProxyConfig {
+    /// Stable id within the proxy store (0 = unsaved/new). Lets the backend
+    /// preserve the right api_key when several configs are saved at once.
+    #[serde(default)]
+    pub id: i64,
     pub name: String,
     pub url: String,
     pub api_key: String,
@@ -51,11 +55,42 @@ pub struct ProxyConfig {
     /// When true, `api_key` is a comma-separated list; the backend picks one per request.
     #[serde(default)]
     pub multi_key: bool,
+    /// Custom system prompt prepended to every chat's system message (the JAI
+    /// "Custom Prompt" box). Applies globally regardless of character.
+    #[serde(default)]
+    pub system_prompt: String,
+}
+
+/// A saved collection of proxy configs plus which one is active. Persisted as a
+/// single `settings` row so the frontend can manage several endpoints (JAI-style
+/// "+ Add Configuration").
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ProxyStore {
+    #[serde(default)]
+    pub configs: Vec<ProxyConfig>,
+    #[serde(default)]
+    pub active: i64,
+}
+
+impl ProxyStore {
+    /// The active config, or the first one, or `None` if the store is empty.
+    pub fn active_config(&self) -> Option<&ProxyConfig> {
+        self.configs
+            .iter()
+            .find(|c| c.id == self.active)
+            .or_else(|| self.configs.first())
+    }
+
+    /// Largest id currently in use (0 if empty). New configs get `max_id()+1`.
+    pub fn max_id(&self) -> i64 {
+        self.configs.iter().map(|c| c.id).max().unwrap_or(0)
+    }
 }
 
 impl Default for ProxyConfig {
     fn default() -> Self {
         ProxyConfig {
+            id: 0,
             name: "My Proxy".into(),
             url: String::new(),
             api_key: String::new(),
@@ -70,6 +105,7 @@ impl Default for ProxyConfig {
             max_tokens: 600,
             context_tokens: 0, // unlimited
             multi_key: false,
+            system_prompt: String::new(),
         }
     }
 }
@@ -233,6 +269,7 @@ pub fn build_request(
     cfg: &ProxyConfig,
     history: &[ChatMessage],
     system: &str,
+    post_history: &str,
 ) -> Result<RenderedRequest, String> {
     // Drop leading non-user turns (e.g. greeting) so the API request starts
     // with a real user message — required by Anthropic Messages and avoids
@@ -252,14 +289,30 @@ pub fn build_request(
 
     let arr = messages_array(&api_history);
     let msgs = serde_json::to_string(&arr).unwrap();
+    let ph = post_history.trim();
     let mut with_sys = vec![json!({"role": "system", "content": system})];
     if let Value::Array(a) = arr {
         with_sys.extend(a);
     }
+    // Post-history (jailbreak / UJB) instructions land AFTER the conversation as
+    // a trailing system message — strongest recency for chat-completion APIs.
+    // This is the `{{messages_system}}` path used by the OpenAI-style default.
+    if !ph.is_empty() {
+        with_sys.push(json!({"role": "system", "content": ph}));
+    }
     let msgs_sys = serde_json::to_string(&Value::Array(with_sys)).unwrap();
 
-    let url = fill(&cfg.url, cfg, &msgs, &msgs_sys, system, &prompt);
-    let body = fill(&cfg.body_template, cfg, &msgs, &msgs_sys, system, &prompt);
+    // Templates that take a scalar `{{system}}` (Anthropic/Gemini) can't carry a
+    // trailing message, so fold the post-history text into the system string for
+    // those paths — still delivered, just without the after-history placement.
+    let system_scalar = if ph.is_empty() {
+        system.to_string()
+    } else {
+        format!("{system}\n\n# Instructions\n{ph}")
+    };
+
+    let url = fill(&cfg.url, cfg, &msgs, &msgs_sys, &system_scalar, &prompt);
+    let body = fill(&cfg.body_template, cfg, &msgs, &msgs_sys, &system_scalar, &prompt);
 
     // Validate the rendered body is legal JSON.
     if serde_json::from_str::<Value>(&body).is_err() {
@@ -271,7 +324,7 @@ pub fn build_request(
         .iter()
         .filter(|(k, _)| !k.trim().is_empty())
         .map(|(k, v)| {
-            let val = fill(v, cfg, &msgs, &msgs_sys, system, &prompt);
+            let val = fill(v, cfg, &msgs, &msgs_sys, &system_scalar, &prompt);
             (k.clone(), val)
         })
         .collect();
@@ -314,7 +367,7 @@ mod tests {
             ChatMessage { from_user: true, text: "Hi there".into() },
             ChatMessage { from_user: false, text: "How can I help?".into() },
         ];
-        let req = build_request(&cfg, &history, "You are a bot.").unwrap();
+        let req = build_request(&cfg, &history, "You are a bot.", "").unwrap();
         let body: Value = serde_json::from_str(&req.body).unwrap();
         let msgs = body["messages"].as_array().unwrap();
         // First message in the API array should be the system message, second
