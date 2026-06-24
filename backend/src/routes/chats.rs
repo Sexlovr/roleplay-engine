@@ -178,41 +178,45 @@ pub async fn send(
     let persona = crate::routes::settings::load_active_persona(&pool);
     let system = llm::build_system(&character, &persona, &chat.memory, &history);
 
-    // A fresh message: masking an LLM error as the bubble text is acceptable
-    // here (nothing pre-existing is polluted) and lets the user see what failed.
-    let reply_text = match llm::complete(
+    // Run the LLM. A failure is returned as a transient `error` (NOT persisted):
+    // the user message stays, but no error bubble is written, so the log and
+    // swipe variants are never polluted. The frontend shows a dismissable banner
+    // with a Retry action.
+    let (reply, error) = match llm::complete(
         &pool, &client, &history, &system, &character.post_history_instructions,
     )
     .await
     {
-        Ok(t) => t,
-        Err(e) => format!("\u{26A0} {e}"),
+        Ok(reply_text) => {
+            let pool3 = pool.clone();
+            let reply = tokio::task::spawn_blocking(move || -> Result<MessageView, AppError> {
+                let conn = pool3.get()?;
+                let now = unix_now();
+                let variants_json =
+                    serde_json::to_string(&vec![reply_text.clone()]).unwrap_or_default();
+                conn.execute(
+                    "INSERT INTO messages (chat_id, from_user, text, variants, variant, created_at)
+                     VALUES (?1,0,?2,?3,0,?4)",
+                    rusqlite::params![id, reply_text, variants_json, now],
+                )?;
+                let reply_id = conn.last_insert_rowid();
+                conn.execute("UPDATE chats SET updated_at=?1 WHERE id=?2", rusqlite::params![now, id])?;
+                Ok(MessageView {
+                    id: reply_id,
+                    from_user: false,
+                    text: reply_text.clone(),
+                    variants: vec![reply_text],
+                    variant: 0,
+                })
+            })
+            .await
+            .map_err(|e| AppError::Internal(format!("join: {e}")))??;
+            (Some(reply), None)
+        }
+        Err(e) => (None, Some(e)),
     };
 
-    let pool3 = pool.clone();
-    let reply = tokio::task::spawn_blocking(move || -> Result<MessageView, AppError> {
-        let conn = pool3.get()?;
-        let now = unix_now();
-        let variants_json = serde_json::to_string(&vec![reply_text.clone()]).unwrap_or_default();
-        conn.execute(
-            "INSERT INTO messages (chat_id, from_user, text, variants, variant, created_at)
-             VALUES (?1,0,?2,?3,0,?4)",
-            rusqlite::params![id, reply_text, variants_json, now],
-        )?;
-        let reply_id = conn.last_insert_rowid();
-        conn.execute("UPDATE chats SET updated_at=?1 WHERE id=?2", rusqlite::params![now, id])?;
-        Ok(MessageView {
-            id: reply_id,
-            from_user: false,
-            text: reply_text.clone(),
-            variants: vec![reply_text],
-            variant: 0,
-        })
-    })
-    .await
-    .map_err(|e| AppError::Internal(format!("join: {e}")))??;
-
-    Ok(Json(SendMessageResp { user: user_msg, reply }))
+    Ok(Json(SendMessageResp { user: user_msg, reply, error }))
 }
 
 /// POST /api/chats/{id}/regenerate — generate a NEW variant (swipe) of the last
@@ -262,15 +266,30 @@ pub async fn regenerate(
     let persona = crate::routes::settings::load_active_persona(&pool);
     let system = llm::build_system(&character, &persona, &chat.memory, &history);
 
-    // Propagate an LLM error instead of masking it: regenerate mutates an
-    // EXISTING message's variants, so persisting an error banner would bake it
-    // in as a permanent swipe. Returning Err lets the frontend restore the prior
-    // reply and show a transient, un-persisted error instead.
-    let reply_text = llm::complete(
+    // An LLM error is returned as a transient `error` (not persisted): the
+    // existing reply is left untouched so nothing is lost. The frontend restores
+    // it and shows a dismissable banner — regenerate must never bake an error
+    // into a message's swipe variants.
+    let reply_text = match llm::complete(
         &pool, &client, &history, &system, &character.post_history_instructions,
     )
     .await
-    .map_err(AppError::Internal)?;
+    {
+        Ok(t) => t,
+        Err(e) => {
+            return Ok(Json(SendMessageResp {
+                user: MessageView {
+                    id: 0,
+                    from_user: true,
+                    text: String::new(),
+                    variants: Vec::new(),
+                    variant: 0,
+                },
+                reply: None,
+                error: Some(e),
+            }));
+        }
+    };
 
     let pool3 = pool.clone();
     let (user_msg, reply) = tokio::task::spawn_blocking(
@@ -352,7 +371,7 @@ pub async fn regenerate(
     .await
     .map_err(|e| AppError::Internal(format!("join: {e}")))??;
 
-    Ok(Json(SendMessageResp { user: user_msg, reply }))
+    Ok(Json(SendMessageResp { user: user_msg, reply: Some(reply), error: None }))
 }
 
 // --- helpers ---

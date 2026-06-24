@@ -82,17 +82,15 @@ pub async fn delete(
     let pool = state.pool.clone();
     tokio::task::spawn_blocking(move || -> Result<Json<serde_json::Value>, AppError> {
         let conn = pool.get()?;
-        // Get the chat so we can check message count.
-        let chat_id: i64 = conn
-            .query_row("SELECT chat_id FROM messages WHERE id=?1", [id], |row| row.get(0))
-            .map_err(|_| AppError::NotFound("Message not found".into()))?;
-        let count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM messages WHERE chat_id=?1",
-            [chat_id],
-            |row| row.get(0),
-        )?;
-        if count <= 1 {
-            return Err(AppError::BadRequest("Cannot delete the last message in a chat.".into()));
+        // Confirm the message exists, then delete it. Any message (including the
+        // last/only one) may be removed — an emptied chat is valid; the user can
+        // send a new message or regenerate to seed a fresh reply.
+        let exists: bool = conn
+            .query_row("SELECT 1 FROM messages WHERE id=?1", [id], |_| Ok(true))
+            .optional()?
+            .unwrap_or(false);
+        if !exists {
+            return Err(AppError::NotFound("Message not found".into()));
         }
         conn.execute("DELETE FROM messages WHERE id=?1", [id])?;
         Ok(Json(serde_json::json!({"ok": true})))

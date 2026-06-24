@@ -223,6 +223,27 @@ pub fn Settings() -> impl IntoView {
 
                 {move || (!loaded.get()).then(|| view! { <div class="field-hint">"Loading\u{2026}"</div> })}
 
+                // ---- footgun guard: OpenAI-style endpoint with no {{messages}} ----
+                {move || {
+                    let aid = active.get();
+                    let warn = configs.with(|v| {
+                        v.iter().find(|c| c.id == aid).map(|c| {
+                            let url = c.url.to_lowercase();
+                            // OpenAI-compatible chat endpoints (incl. most proxies)
+                            // require a `messages` array; warn if the body lacks it.
+                            url.contains("chat/completions") && !c.body_template.contains("{{messages")
+                        }).unwrap_or(false)
+                    });
+                    warn.then(|| view! {
+                        <div class="settings-warn" role="alert">
+                            "\u{26A0} This endpoint looks OpenAI-compatible, but the request body has no "
+                            <code>"{{messages}}"</code>
+                            " — the server will reject it with \u{201C}messages is required\u{201D}. "
+                            "Click the "<b>"OpenAI-compatible"</b>" preset below to fix it."
+                        </div>
+                    })
+                }}
+
                 // ---- presets ----
                 <label class="settings-row">
                     <span>"Preset"<small>" — fills the template below"</small></span>

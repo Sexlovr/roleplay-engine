@@ -13,4 +13,4 @@ gloo-net = { version = "0.6", features = ["http"] }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
-web-sys = { version = "0.3", features = ["Element", "HtmlElement", "HtmlInputElement", "HtmlSelectElement", "File", "FileList", "FileReader", "Blob"] }
+web-sys = { version = "0.3", features = ["Element", "HtmlElement", "HtmlInputElement", "HtmlSelectElement", "File", "FileList", "FileReader", "Blob", "Window", "Document", "HtmlImageElement", "HtmlCanvasElement", "CanvasRenderingContext2d"] }

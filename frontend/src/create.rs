@@ -15,8 +15,6 @@ use shared::types::Character;
 use crate::api;
 use crate::Page;
 
-const MAX_AVATAR_BYTES: f64 = 512.0 * 1024.0;
-
 /// All editable fields, held as signals so create + edit share one form body.
 #[derive(Clone, Copy)]
 struct Form {
@@ -178,15 +176,13 @@ pub fn Create(edit_id: Option<i64>) -> impl IntoView {
     let is_advanced = move || version.get() != "1.0";
 
     // --- avatar upload ---
+    // No size limit: the image is decoded and downscaled client-side to a small
+    // JPEG before storing, so any-size photo is accepted.
     let on_avatar_file = move |ev: web_sys::Event| {
         let input: HtmlInputElement = ev.target().unwrap().unchecked_into();
         let Some(files) = input.files() else { return };
         let Some(file) = files.get(0) else { return };
-        if file.size() > MAX_AVATAR_BYTES {
-            error.set(Some("Image is over 512 KB. Pick a smaller one or paste a URL.".into()));
-            return;
-        }
-        crate::upload::read_as_data_url(file, move |res| match res {
+        crate::upload::read_image_scaled(file, 768, move |res| match res {
             Ok(data) => form.avatar.set(data),
             Err(e) => error.set(Some(format!("Image read failed: {e}"))),
         });
@@ -246,11 +242,9 @@ pub fn Create(edit_id: Option<i64>) -> impl IntoView {
             crate::upload::read_as_bytes(file, move |res| match res {
                 Ok(bytes) => match shared::card::extract_png_card(&bytes) {
                     Some(json) => {
-                        let avatar = if bytes.len() as f64 <= MAX_AVATAR_BYTES {
-                            Some(format!("data:image/png;base64,{}", shared::card::base64_encode(&bytes)))
-                        } else {
-                            None
-                        };
+                        // Use the card art itself as the avatar (deliberate import).
+                        let avatar =
+                            Some(format!("data:image/png;base64,{}", shared::card::base64_encode(&bytes)));
                         apply_card(json, avatar);
                     }
                     None => error.set(Some("That PNG has no embedded character card.".into())),

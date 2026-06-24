@@ -33,6 +33,10 @@ pub fn Chat(id: i64) -> impl IntoView {
     let editing: RwSignal<Option<i64>> = RwSignal::new(None); // message id being edited
     let edit_draft = RwSignal::new(String::new());
     let sending = RwSignal::new(false);
+    // Transient LLM/upstream error shown as a dismissable banner above the
+    // composer — never written into the message log (so it can't pollute swipe
+    // variants or be mistaken for a real reply).
+    let err_banner: RwSignal<Option<String>> = RwSignal::new(None);
     let log_ref: NodeRef<Div> = NodeRef::new();
 
     // Load the full chat detail from the server.
@@ -80,6 +84,7 @@ pub fn Chat(id: i64) -> impl IntoView {
             return;
         }
         draft.set(String::new());
+        err_banner.set(None);
         // Optimistic: show the user message immediately.
         messages.update(|l| l.push(MessageView {
             id: 0, from_user: true, text: text.clone(), variants: Vec::new(), variant: 0,
@@ -93,26 +98,27 @@ pub fn Chat(id: i64) -> impl IntoView {
         spawn_local(async move {
             let res = api::send_message(id, text.clone()).await;
             sending.set(false);
-            messages.update(|l| {
-                // Remove the placeholder.
-                l.retain(|m| m.id != -1);
-                // Remove the optimistic user message.
-                l.retain(|m| m.id != 0);
-                match res {
-                    Ok(resp) => {
-                        l.push(resp.user);
-                        l.push(resp.reply);
+            // Drop the placeholder + optimistic user message before reconciling.
+            messages.update(|l| l.retain(|m| m.id != -1 && m.id != 0));
+            match res {
+                Ok(resp) => {
+                    messages.update(|l| l.push(resp.user));
+                    if let Some(reply) = resp.reply {
+                        messages.update(|l| l.push(reply));
                     }
-                    Err(e) => {
-                        l.push(MessageView {
-                            id: -2, from_user: false, text: format!("\u{26A0} {e}"),
-                            variants: Vec::new(), variant: 0,
-                        });
-                        // Restore the user's text so it isn't lost — they can retry.
-                        draft.set(text);
+                    if let Some(err) = resp.error {
+                        // LLM/upstream failure: the user message IS saved, but no
+                        // reply was generated. Banner offers Retry (regenerate).
+                        err_banner.set(Some(err));
                     }
                 }
-            });
+                Err(e) => {
+                    // Network / backend error: the user message wasn't saved.
+                    // Restore the draft so nothing is lost.
+                    draft.set(text);
+                    err_banner.set(Some(e));
+                }
+            }
         });
     };
 
@@ -133,6 +139,7 @@ pub fn Chat(id: i64) -> impl IntoView {
         if stashed.is_some() {
             messages.update(|l| { l.pop(); });
         }
+        err_banner.set(None);
         messages.update(|l| l.push(MessageView {
             id: -1, from_user: false, text: "\u{2026}".into(), variants: Vec::new(), variant: 0,
         }));
@@ -141,22 +148,27 @@ pub fn Chat(id: i64) -> impl IntoView {
         spawn_local(async move {
             let res = api::regenerate(id).await;
             sending.set(false);
-            messages.update(|l| {
-                l.retain(|m| m.id != -1);
-                match res {
-                    Ok(resp) => l.push(resp.reply),
-                    Err(e) => {
-                        // Restore the previous reply, then show the error.
-                        if let Some(prev) = stashed {
-                            l.push(prev);
-                        }
-                        l.push(MessageView {
-                            id: -2, from_user: false, text: format!("\u{26A0} {e}"),
-                            variants: Vec::new(), variant: 0,
-                        });
-                    }
+            messages.update(|l| l.retain(|m| m.id != -1));
+            match res {
+                // Success: the server appended a new swipe variant (same id).
+                Ok(resp) if resp.reply.is_some() => {
+                    messages.update(|l| l.push(resp.reply.unwrap()));
                 }
-            });
+                // Structured error OR transport error: restore the prior reply
+                // and surface a dismissable banner. No error bubble is created.
+                Ok(resp) => {
+                    if let Some(prev) = stashed {
+                        messages.update(|l| l.push(prev));
+                    }
+                    err_banner.set(Some(resp.error.unwrap_or_else(|| "Generation failed.".into())));
+                }
+                Err(e) => {
+                    if let Some(prev) = stashed {
+                        messages.update(|l| l.push(prev));
+                    }
+                    err_banner.set(Some(e));
+                }
+            }
         });
     };
 
@@ -230,10 +242,8 @@ pub fn Chat(id: i64) -> impl IntoView {
         if msg_id <= 0 {
             return;
         }
-        let too_few = messages.with_untracked(|l| l.len() <= 1);
-        if too_few {
-            return;
-        }
+        // Any message may be deleted, including the last one (an empty chat is
+        // valid — the user can send again or regenerate to seed a fresh reply).
         messages.update(|l| l.retain(|m| m.id != msg_id));
         spawn_local(async move {
             let _ = api::delete_message(msg_id).await;
@@ -254,20 +264,18 @@ pub fn Chat(id: i64) -> impl IntoView {
         let msgs = messages.get();
         let last = msgs.len().saturating_sub(1);
         let has_user = msgs.iter().any(|m| m.from_user);
-        let can_delete = msgs.len() > 1;
         let av = character_avatar.get();
         msgs.into_iter()
             .enumerate()
             .map(move |(i, m)| {
                 let from_user = m.from_user;
                 let is_placeholder = m.id == -1;
-                let is_error = m.id == -2;
                 let is_editing = editing_id == Some(m.id);
-                let is_last_bot = i == last && !from_user && has_user && !is_error && !is_placeholder;
+                let is_last_bot = i == last && !from_user && has_user && !is_placeholder;
                 // Swipes don't require a prior user turn, so a fresh chat's
                 // greeting (the last/only bot message) can still cycle its
                 // seeded alternate-greeting variants.
-                let is_swipeable = i == last && !from_user && !is_error && !is_placeholder;
+                let is_swipeable = i == last && !from_user && !is_placeholder;
                 let text = m.text.clone();
                 let msg_id = m.id;
                 let edit_seed = m.text.clone();
@@ -306,7 +314,7 @@ pub fn Chat(id: i64) -> impl IntoView {
                     }
                 });
 
-                let actions = (!is_placeholder && !is_error).then(|| view! {
+                let actions = (!is_placeholder).then(|| view! {
                     <div class="msg__actions">
                         {swipes}
                         {is_last_bot.then(|| {
@@ -316,10 +324,8 @@ pub fn Chat(id: i64) -> impl IntoView {
                         {(msg_id > 0).then(|| view! {
                             <button class="msg__act" title="Edit"
                                 on:click=move |_| { editing.set(Some(msg_id)); edit_draft.set(edit_seed.clone()); }>"\u{270E}"</button>
-                            {can_delete.then(|| view! {
-                                <button class="msg__act" title="Delete"
-                                    on:click=move |_| do_delete(msg_id)>"\u{1F5D1}"</button>
-                            })}
+                            <button class="msg__act" title="Delete"
+                                on:click=move |_| do_delete(msg_id)>"\u{1F5D1}"</button>
                         })}
                     </div>
                 });
@@ -422,6 +428,23 @@ pub fn Chat(id: i64) -> impl IntoView {
                         </div>
 
                         <div class="chat__log" node_ref=log_ref>{log_view}</div>
+
+                        {move || err_banner.get().map(|e| {
+                            let regen = do_regenerate;
+                            view! {
+                                <div class="chat__error" role="alert">
+                                    <span class="chat__error-msg">{e}</span>
+                                    <span class="chat__error-acts">
+                                        <button class="chat__error-retry"
+                                            on:click=move |_| { err_banner.set(None); regen(); }>
+                                            "\u{21BB} Retry"
+                                        </button>
+                                        <button class="chat__error-x" title="Dismiss"
+                                            on:click=move |_| err_banner.set(None)>"\u{2715}"</button>
+                                    </span>
+                                </div>
+                            }
+                        })}
 
                         <div class="chat__composer">
                             <textarea

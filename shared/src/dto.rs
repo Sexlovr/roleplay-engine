@@ -138,10 +138,18 @@ pub struct SendMessageReq {
     pub text: String,
 }
 
+/// Result of a send/regenerate. `reply` is the assistant message when the LLM
+/// succeeded; on an LLM/upstream failure it is `None` and `error` carries the
+/// message instead. LLM errors are NEVER persisted as a chat bubble — the
+/// frontend shows them as a transient, dismissable banner — so a failed
+/// generation can't pollute the message log or its swipe variants.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SendMessageResp {
     pub user: MessageView,
-    pub reply: MessageView,
+    #[serde(default)]
+    pub reply: Option<MessageView>,
+    #[serde(default)]
+    pub error: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
