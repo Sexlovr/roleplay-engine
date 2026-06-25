@@ -42,6 +42,7 @@
 
   --maxw: 1180px;
   --sb:   244px;   /* sidebar width */
+  --appbar-h: 56px; /* phone-only top app bar height */
 }
 
 * { box-sizing: border-box; }
@@ -324,6 +325,27 @@ a { color: var(--accent); }
 .sidebar__chip:hover { color: var(--ink); background: var(--glass-2); border-color: var(--hair-2); }
 .sidebar__chiptext { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sidebar__foot .nsfw-toggle { width: 100%; text-align: center; }
+
+/* ---- phone-only top app bar + drawer backdrop (shown via media query) ---- */
+.appbar { display: none; }   /* visible only on phones (≤767px) */
+.appbar__burger, .appbar__icon {
+  font-size: 1.2rem; line-height: 1;
+  color: var(--ink-soft);
+  background: var(--glass-2); border: 1px solid var(--hair);
+  width: 38px; height: 38px; border-radius: 10px; cursor: pointer; flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  transition: background .2s, color .2s, border-color .2s;
+}
+.appbar__burger:hover, .appbar__icon:hover { color: var(--ink); background: var(--glass-3); }
+.appbar__brand {
+  font-family: "Space Grotesk", sans-serif;
+  font-weight: 700; font-size: 1.06rem; letter-spacing: -.02em;
+  cursor: pointer; user-select: none;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.appbar__spacer { flex: 1; }
+
+.sidebar-backdrop { display: none; }   /* shown only when the drawer is open on phones */
 
 /* ============================ home / hero =============================== */
 .hero { text-align: center; padding: 2.4rem 1rem 1.6rem; }
@@ -1117,8 +1139,19 @@ select.field option { background: #0b0b14; color: var(--ink); }
 .lore__add { align-self: flex-start; font-size: .88rem; padding: .5rem .95rem; }
 
 /* ============================ responsive =============================== */
-@media (max-width: 980px) {
-  /* Slim icon rail — labels hidden, chips icon-only. */
+/* Breakpoint map:
+     ≥1600px  ultrawide   — wider content cap so the auto-fill grid gains columns
+     1024–1599 desktop     — full 244px docked sidebar (the base styles)
+     768–1023  tablet      — sidebar collapses to a slim icon rail
+     ≤767px    phone       — sidebar becomes an off-canvas drawer behind a top app bar
+   The character page stacks its two columns a little earlier (≤920px).            */
+
+/* ---- ultrawide: let the auto-fill card grid breathe with more columns ---- */
+@media (min-width: 1600px) { :root { --maxw: 1480px; } }
+@media (min-width: 1920px) { :root { --maxw: 1680px; } }
+
+/* ---- tablets / small laptops: slim icon rail (labels hidden) ---- */
+@media (min-width: 768px) and (max-width: 1023px) {
   :root { --sb: 68px; }
   .sidebar { padding: 1rem .5rem; align-items: stretch; }
   .sidebar__brandtext, .navitem__label, .sidebar__chiptext { display: none; }
@@ -1127,18 +1160,90 @@ select.field option { background: #0b0b14; color: var(--ink); }
   .navitem__icon { width: auto; }
   .sidebar__foot .nsfw-toggle { padding: .5rem 0; font-size: .68rem; }
 }
-@media (max-width: 860px) {
+
+/* ---- character page: stack the aside above the definition ---- */
+@media (max-width: 920px) {
   .charpage__grid { grid-template-columns: 1fr; }
   .charpage__aside { position: static; max-width: 360px; margin: 0 auto; }
 }
-@media (max-width: 680px) {
-  .content { padding: 1rem .9rem 3rem; }
-  .content--chat { padding: .6rem .7rem; }
-  .card-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: .8rem; }
-  .hero { padding: 1.4rem .5rem 1rem; }
-  .msg__wrap { max-width: 86%; }
+
+/* ---- phones: off-canvas drawer + top app bar ---- */
+@media (max-width: 767px) {
+  /* show the phone chrome */
+  .appbar {
+    display: flex; align-items: center; gap: .6rem;
+    position: fixed; top: 0; left: 0; right: 0; z-index: 50;
+    height: calc(var(--appbar-h) + env(safe-area-inset-top, 0px));
+    padding: env(safe-area-inset-top, 0px) .8rem 0;
+    background: rgba(6,6,12,.7);
+    -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur);
+    border-bottom: 1px solid var(--hair);
+  }
+  .sidebar-backdrop {
+    display: block;
+    position: fixed; inset: 0; z-index: 70;
+    background: rgba(0,0,0,.55);
+    -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px);
+    animation: fade .2s ease;
+  }
+
+  /* main content takes the full width; clear the fixed app bar */
+  .shell__main {
+    margin-left: 0;
+    padding-top: calc(var(--appbar-h) + env(safe-area-inset-top, 0px));
+  }
+
+  /* sidebar slides in from the left as a full-label drawer */
+  .sidebar {
+    width: min(80vw, 300px);
+    z-index: 80;
+    transform: translateX(-100%);
+    transition: transform .28s cubic-bezier(.2,.7,.3,1);
+    box-shadow: 30px 0 80px -30px rgba(0,0,0,.92);
+    padding-top: calc(1.1rem + env(safe-area-inset-top, 0px));
+  }
+  .sidebar--open { transform: none; }
+  .sidebar__brandtext, .navitem__label, .sidebar__chiptext { display: inline; }
+
+  /* fluid page padding */
+  .content { padding: clamp(.85rem, 4vw, 1.2rem) clamp(.8rem, 4vw, 1.1rem) 3rem; }
+  .content--chat {
+    height: calc(100dvh - var(--appbar-h) - env(safe-area-inset-top, 0px));
+    padding: .55rem .6rem;
+  }
+
+  /* compact two-up card grid instead of giant full-width cards */
+  .card-grid { grid-template-columns: repeat(2, 1fr); gap: .7rem; }
+  .card__body { padding: .65rem .7rem .8rem; gap: .35rem; }
+  .card__name { font-size: .96rem; }
+  .card__tagline { font-size: .8rem; min-height: 2.3em; }
+  .card__tags { display: none; }   /* too cramped on small cards */
+  .card__meta { font-size: .72rem; }
+
+  .hero { padding: 1.2rem .5rem .8rem; }
+  .hero__sub { font-size: .92rem; }
+  .home__search { margin-top: 1rem; }
+
+  .msg__wrap { max-width: 88%; }
+  .chat__creator { display: none; }   /* save a row; app bar + topbar are tight */
+  .chat__model { max-width: 120px; }
+  .chat__composer { padding-bottom: calc(.55rem + env(safe-area-inset-bottom, 0px)); }
+
   .settings-panel { width: 100vw; }
   .create__card { padding: 1.1rem; }
   .create__row { justify-content: center; }
   .chatrow__avatar { width: 44px; height: 44px; }
+}
+
+/* ---- tiny phones: single column when two cards no longer fit comfortably ---- */
+@media (max-width: 330px) {
+  .card-grid { grid-template-columns: 1fr; }
+  .card__tags { display: flex; }
+}
+
+/* ---- short / landscape viewports: trim vertical chrome so chat stays usable ---- */
+@media (max-height: 540px) {
+  .hero { padding: .8rem .5rem .5rem; }
+  .hero__title { font-size: clamp(1.4rem, 5vw, 2rem); }
+  .chat__input { max-height: 96px; }
 }

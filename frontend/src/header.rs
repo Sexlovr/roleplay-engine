@@ -15,6 +15,13 @@ pub fn Sidebar() -> impl IntoView {
     let persona_open = use_context::<crate::PersonaOpen>().unwrap().0;
     let cfg_sig = use_context::<crate::ApiConfig>().unwrap().0;
     let persona_sig = use_context::<crate::PersonaCtx>().unwrap().0;
+    let mobile_open = use_context::<crate::MobileNavOpen>().unwrap().0;
+    // Navigating (or opening a drawer) dismisses the off-canvas drawer on phones;
+    // a no-op above the phone breakpoint where the sidebar is always docked.
+    let go = move |p: Page| {
+        page.set(p);
+        mobile_open.set(false);
+    };
 
     let model_label = move || {
         let c = cfg_sig.get();
@@ -34,8 +41,8 @@ pub fn Sidebar() -> impl IntoView {
     };
 
     view! {
-        <aside class="sidebar">
-            <div class="sidebar__brand" on:click=move |_| page.set(Page::Home)>
+        <aside class="sidebar" class=("sidebar--open", move || mobile_open.get())>
+            <div class="sidebar__brand" on:click=move |_| go(Page::Home)>
                 <span class="sidebar__mark">"\u{25C6}"</span>
                 <span class="sidebar__brandtext">
                     <span class="header__logo-accent">"Roleplay"</span>" Engine"
@@ -44,28 +51,30 @@ pub fn Sidebar() -> impl IntoView {
 
             <nav class="sidebar__nav">
                 <button class="navitem" class=("navitem--active", move || matches!(page.get(), Page::Home))
-                    on:click=move |_| page.set(Page::Home)>
+                    on:click=move |_| go(Page::Home)>
                     <span class="navitem__icon">"\u{1F3E0}"</span>
                     <span class="navitem__label">"Discover"</span>
                 </button>
                 <button class="navitem" class=("navitem--active", move || matches!(page.get(), Page::Chats))
-                    on:click=move |_| page.set(Page::Chats)>
+                    on:click=move |_| go(Page::Chats)>
                     <span class="navitem__icon">"\u{1F4AC}"</span>
                     <span class="navitem__label">"Chats"</span>
                 </button>
                 <button class="navitem" class=("navitem--active", move || matches!(page.get(), Page::Create | Page::Edit(_)))
-                    on:click=move |_| page.set(Page::Create)>
+                    on:click=move |_| go(Page::Create)>
                     <span class="navitem__icon">"\u{2795}"</span>
                     <span class="navitem__label">"Create"</span>
                 </button>
             </nav>
 
             <div class="sidebar__foot">
-                <button class="sidebar__chip" title="Personas" on:click=move |_| persona_open.set(true)>
+                <button class="sidebar__chip" title="Personas"
+                    on:click=move |_| { persona_open.set(true); mobile_open.set(false); }>
                     <span class="navitem__icon">"\u{1F464}"</span>
                     <span class="sidebar__chiptext">{persona_label}</span>
                 </button>
-                <button class="sidebar__chip" title="Model / API connection" on:click=move |_| settings_open.set(true)>
+                <button class="sidebar__chip" title="Model / API connection"
+                    on:click=move |_| { settings_open.set(true); mobile_open.set(false); }>
                     <span class="navitem__icon">"\u{2699}"</span>
                     <span class="sidebar__chiptext">{model_label}</span>
                 </button>
@@ -75,5 +84,32 @@ pub fn Sidebar() -> impl IntoView {
                 </button>
             </div>
         </aside>
+    }
+}
+
+/// Phone-only top app bar. Hidden by CSS above the phone breakpoint; on phones
+/// it provides the hamburger that opens the sidebar drawer, a brand that returns
+/// home, and a quick gear for the API/model settings.
+#[component]
+pub fn MobileBar() -> impl IntoView {
+    let page = use_context::<RwSignal<Page>>().unwrap();
+    let settings_open = use_context::<crate::SettingsOpen>().unwrap().0;
+    let mobile_open = use_context::<crate::MobileNavOpen>().unwrap().0;
+
+    view! {
+        <header class="appbar">
+            <button class="appbar__burger" aria-label="Open menu"
+                on:click=move |_| mobile_open.update(|v| *v = !*v)>
+                "\u{2630}"
+            </button>
+            <div class="appbar__brand" on:click=move |_| { page.set(Page::Home); mobile_open.set(false); }>
+                <span class="header__logo-accent">"Roleplay"</span>" Engine"
+            </div>
+            <div class="appbar__spacer"></div>
+            <button class="appbar__icon" aria-label="Settings"
+                on:click=move |_| { settings_open.set(true); mobile_open.set(false); }>
+                "\u{2699}"
+            </button>
+        </header>
     }
 }

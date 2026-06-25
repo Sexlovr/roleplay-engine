@@ -29,7 +29,7 @@ use character::CharacterPage;
 use chat::Chat;
 use chats::Chats;
 use create::Create;
-use header::Sidebar;
+use header::{MobileBar, Sidebar};
 use home::Home;
 
 /// Which screen is currently shown. Stored as `RwSignal<Page>` in context;
@@ -66,6 +66,10 @@ pub struct PersonaCtx(pub RwSignal<Persona>);
 /// Whether the persona editor drawer is open.
 #[derive(Copy, Clone)]
 pub struct PersonaOpen(pub RwSignal<bool>);
+/// Whether the sidebar is open as an off-canvas drawer (phones only). Ignored by
+/// CSS above the phone breakpoint, where the sidebar is always visible.
+#[derive(Copy, Clone)]
+pub struct MobileNavOpen(pub RwSignal<bool>);
 
 #[component]
 fn App() -> impl IntoView {
@@ -82,6 +86,7 @@ fn App() -> impl IntoView {
     provide_context(SettingsOpen(RwSignal::new(false)));
     provide_context(PersonaCtx(persona));
     provide_context(PersonaOpen(RwSignal::new(false)));
+    provide_context(MobileNavOpen(RwSignal::new(false)));
 
     // Load settings from the server once at startup; surface the active proxy +
     // persona into context.
@@ -105,10 +110,15 @@ fn App() -> impl IntoView {
 
     let settings_open = use_context::<SettingsOpen>().unwrap().0;
     let persona_open = use_context::<PersonaOpen>().unwrap().0;
+    let mobile_open = use_context::<MobileNavOpen>().unwrap().0;
 
     view! {
+        <MobileBar/>
         <div class="shell">
             <Sidebar/>
+            {move || mobile_open.get().then(|| view! {
+                <div class="sidebar-backdrop" on:click=move |_| mobile_open.set(false)></div>
+            })}
             <main class="shell__main">
                 {move || match page.get() {
                     Page::Home => view! { <div class="content"><Home/></div> }.into_any(),
