@@ -1,73 +1,79 @@
-//! Sticky top navigation bar: logo (home nav), global search box, NSFW toggle,
-//! Create button, and model/persona access buttons. No "Log in" button — the
-//! app has no auth.
+//! Left sidebar app shell: brand, primary navigation (Discover / Chats /
+//! Create), and a footer with the active persona, the model/API connection,
+//! and the NSFW toggle. This replaces the old top header — one organized
+//! navigation rail instead of controls scattered across a bar.
 
 use leptos::prelude::*;
 
 use crate::Page;
 
 #[component]
-pub fn Header() -> impl IntoView {
+pub fn Sidebar() -> impl IntoView {
     let page = use_context::<RwSignal<Page>>().unwrap();
-    let search = use_context::<crate::SearchQuery>().unwrap().0;
     let nsfw = use_context::<crate::NsfwEnabled>().unwrap().0;
     let settings_open = use_context::<crate::SettingsOpen>().unwrap().0;
-    let cfg_sig = use_context::<crate::ApiConfig>().unwrap().0;
     let persona_open = use_context::<crate::PersonaOpen>().unwrap().0;
+    let cfg_sig = use_context::<crate::ApiConfig>().unwrap().0;
+    let persona_sig = use_context::<crate::PersonaCtx>().unwrap().0;
 
     let model_label = move || {
         let c = cfg_sig.get();
         if c.url.trim().is_empty() {
-            "\u{2699} API".to_string()
+            "Connect API".to_string()
         } else {
-            format!("\u{2699} {}", c.name)
+            c.name.clone()
+        }
+    };
+    let persona_label = move || {
+        let p = persona_sig.get();
+        if p.name.trim().is_empty() {
+            "Persona".to_string()
+        } else {
+            p.name.clone()
         }
     };
 
     view! {
-        <header class="header">
-            <div class="header__inner">
-                <div class="header__left">
-                    <div
-                        class="header__logo"
-                        on:click=move |_| { search.set(String::new()); page.set(Page::Home) }
-                    >
-                        <span class="header__logo-accent">"Roleplay"</span>
-                        " Engine"
-                    </div>
-                </div>
-
-                // Search is only meaningful on the gallery; hide it elsewhere.
-                {move || (page.get() == Page::Home).then(|| view! {
-                    <input
-                        class="header__search"
-                        r#type="text"
-                        placeholder="Search characters..."
-                        aria-label="Search characters"
-                        prop:value=move || search.get()
-                        on:input=move |ev| search.set(event_target_value(&ev))
-                    />
-                })}
-
-                <div class="header__actions">
-                    <button class="header__persona" on:click=move |_| persona_open.set(true)>
-                        "\u{1F464}"
-                    </button>
-                    <button class="header__settings" on:click=move |_| settings_open.set(true)>
-                        {model_label}
-                    </button>
-                    <button
-                        class="nsfw-toggle"
-                        class=("nsfw-toggle--on", move || nsfw.get())
-                        on:click=move |_| nsfw.update(|v| *v = !*v)
-                    >
-                        "NSFW"
-                    </button>
-                    <button class="btn header__create" on:click=move |_| page.set(Page::Create)>
-                        "+ Create"
-                    </button>
-                </div>
+        <aside class="sidebar">
+            <div class="sidebar__brand" on:click=move |_| page.set(Page::Home)>
+                <span class="sidebar__mark">"\u{25C6}"</span>
+                <span class="sidebar__brandtext">
+                    <span class="header__logo-accent">"Roleplay"</span>" Engine"
+                </span>
             </div>
-        </header>
+
+            <nav class="sidebar__nav">
+                <button class="navitem" class=("navitem--active", move || matches!(page.get(), Page::Home))
+                    on:click=move |_| page.set(Page::Home)>
+                    <span class="navitem__icon">"\u{1F3E0}"</span>
+                    <span class="navitem__label">"Discover"</span>
+                </button>
+                <button class="navitem" class=("navitem--active", move || matches!(page.get(), Page::Chats))
+                    on:click=move |_| page.set(Page::Chats)>
+                    <span class="navitem__icon">"\u{1F4AC}"</span>
+                    <span class="navitem__label">"Chats"</span>
+                </button>
+                <button class="navitem" class=("navitem--active", move || matches!(page.get(), Page::Create | Page::Edit(_)))
+                    on:click=move |_| page.set(Page::Create)>
+                    <span class="navitem__icon">"\u{2795}"</span>
+                    <span class="navitem__label">"Create"</span>
+                </button>
+            </nav>
+
+            <div class="sidebar__foot">
+                <button class="sidebar__chip" title="Personas" on:click=move |_| persona_open.set(true)>
+                    <span class="navitem__icon">"\u{1F464}"</span>
+                    <span class="sidebar__chiptext">{persona_label}</span>
+                </button>
+                <button class="sidebar__chip" title="Model / API connection" on:click=move |_| settings_open.set(true)>
+                    <span class="navitem__icon">"\u{2699}"</span>
+                    <span class="sidebar__chiptext">{model_label}</span>
+                </button>
+                <button class="nsfw-toggle" class=("nsfw-toggle--on", move || nsfw.get())
+                    on:click=move |_| nsfw.update(|v| *v = !*v)>
+                    "NSFW"
+                </button>
+            </div>
+        </aside>
     }
 }

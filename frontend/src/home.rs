@@ -151,6 +151,17 @@ pub fn Home() -> impl IntoView {
             <div class="hero">
                 <h1 class="hero__title">"Discover Characters"</h1>
                 <p class="hero__sub">"Chat with AI personalities — or create your own."</p>
+                <div class="home__search">
+                    <span class="home__searchicon">"\u{1F50D}"</span>
+                    <input
+                        class="home__searchfield"
+                        r#type="text"
+                        placeholder="Search characters, tags…"
+                        aria-label="Search characters"
+                        prop:value=move || search.get()
+                        on:input=move |ev| search.set(event_target_value(&ev))
+                    />
+                </div>
             </div>
 
             <div class="tab-bar">

@@ -1,8 +1,10 @@
 //! Create / edit a character. A single form drives both: pass `edit_id=None`
 //! to create, or `edit_id=Some(id)` to load an existing character and PUT the
-//! changes. A "card version" dropdown (V1 / V2 / V3) progressively reveals the
-//! richer Tavern fields, and an Import panel ingests a SillyTavern card from
-//! pasted JSON or a `.png`/`.json` file (V1/V2/V3, parsed client-side).
+//! changes. The form is grouped into labelled sections (Identity, Persona,
+//! Greeting, Lorebook, Advanced) so it reads like a real character editor
+//! rather than one long stack of inputs. A "card version" dropdown (V1/V2/V3)
+//! progressively reveals the richer Tavern fields, and an Import panel ingests
+//! a SillyTavern card from pasted JSON or a `.png`/`.json` file.
 
 use leptos::prelude::*;
 use wasm_bindgen::JsCast;
@@ -10,10 +12,21 @@ use wasm_bindgen_futures::spawn_local;
 use web_sys::HtmlInputElement;
 
 use shared::dto::{NewCharacterReq, UpdateCharacterReq};
-use shared::types::Character;
+use shared::types::{Character, LoreEntry};
 
 use crate::api;
 use crate::Page;
+
+/// One lorebook entry, modelled as per-field signals so each input edits in
+/// place without re-rendering the whole list (keyed by `id` in a `<For>`, so
+/// typing never steals focus). `keys` is the comma-separated UI string.
+#[derive(Clone, Copy)]
+struct LoreRow {
+    id: usize,
+    keys: RwSignal<String>,
+    content: RwSignal<String>,
+    enabled: RwSignal<bool>,
+}
 
 /// All editable fields, held as signals so create + edit share one form body.
 #[derive(Clone, Copy)]
@@ -35,6 +48,9 @@ struct Form {
     alternate_greetings: RwSignal<String>, // one per line
     creator_notes: RwSignal<String>,
     spec_version: RwSignal<String>,
+    // Lorebook / world-info entries + a monotonic id source for stable keys.
+    lore: RwSignal<Vec<LoreRow>>,
+    next_lore_id: RwSignal<usize>,
 }
 
 impl Form {
@@ -56,6 +72,8 @@ impl Form {
             alternate_greetings: RwSignal::new(String::new()),
             creator_notes: RwSignal::new(String::new()),
             spec_version: RwSignal::new(String::new()),
+            lore: RwSignal::new(Vec::new()),
+            next_lore_id: RwSignal::new(0),
         }
     }
 
@@ -76,6 +94,7 @@ impl Form {
         self.alternate_greetings.set(c.alternate_greetings.join("\n"));
         self.creator_notes.set(c.creator_notes.clone());
         self.spec_version.set(c.spec_version.clone());
+        self.set_lore(&c.lorebook);
     }
 
     fn tags_vec(&self) -> Vec<String> {
@@ -93,6 +112,45 @@ impl Form {
             .lines()
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
+            .collect()
+    }
+
+    /// Replace the working lore list from stored entries, reseeding stable ids.
+    fn set_lore(&self, entries: &[LoreEntry]) {
+        let rows: Vec<LoreRow> = entries
+            .iter()
+            .enumerate()
+            .map(|(i, e)| LoreRow {
+                id: i,
+                keys: RwSignal::new(e.keys.join(", ")),
+                content: RwSignal::new(e.content.clone()),
+                enabled: RwSignal::new(e.enabled),
+            })
+            .collect();
+        self.next_lore_id.set(rows.len());
+        self.lore.set(rows);
+    }
+
+    /// Collapse the working rows into storable entries, dropping fully-empty
+    /// ones (no keys and no content).
+    fn lore_vec(&self) -> Vec<LoreEntry> {
+        self.lore
+            .get_untracked()
+            .into_iter()
+            .filter_map(|r| {
+                let keys: Vec<String> = r
+                    .keys
+                    .get_untracked()
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                let content = r.content.get_untracked().trim().to_string();
+                if keys.is_empty() && content.is_empty() {
+                    return None;
+                }
+                Some(LoreEntry { keys, content, enabled: r.enabled.get_untracked() })
+            })
             .collect()
     }
 
@@ -114,7 +172,7 @@ impl Form {
             post_history_instructions: Some(self.post_history_instructions.get_untracked()),
             mes_example: Some(self.mes_example.get_untracked()),
             alternate_greetings: Some(self.greetings_vec()),
-            lorebook: None,
+            lorebook: Some(self.lore_vec()),
         }
     }
 
@@ -136,7 +194,7 @@ impl Form {
             post_history_instructions: Some(self.post_history_instructions.get_untracked()),
             mes_example: Some(self.mes_example.get_untracked()),
             alternate_greetings: Some(self.greetings_vec()),
-            lorebook: None,
+            lorebook: Some(self.lore_vec()),
         }
     }
 }
@@ -175,6 +233,23 @@ pub fn Create(edit_id: Option<i64>) -> impl IntoView {
 
     let is_advanced = move || version.get() != "1.0";
 
+    // --- lorebook editing ---
+    let add_lore = move |_| {
+        let id = form.next_lore_id.get_untracked();
+        form.next_lore_id.set(id + 1);
+        form.lore.update(|v| {
+            v.push(LoreRow {
+                id,
+                keys: RwSignal::new(String::new()),
+                content: RwSignal::new(String::new()),
+                enabled: RwSignal::new(true),
+            })
+        });
+    };
+    let remove_lore = move |row_id: usize| {
+        form.lore.update(|v| v.retain(|r| r.id != row_id));
+    };
+
     // --- avatar upload ---
     // No size limit: the image is decoded and downscaled client-side to a small
     // JPEG before storing, so any-size photo is accepted.
@@ -206,6 +281,7 @@ pub fn Create(edit_id: Option<i64>) -> impl IntoView {
                 if let Some(v) = req.post_history_instructions { form.post_history_instructions.set(v); }
                 if let Some(v) = req.alternate_greetings { form.alternate_greetings.set(v.join("\n")); }
                 if let Some(v) = req.creator_notes { form.creator_notes.set(v); }
+                if let Some(v) = req.lorebook { form.set_lore(&v); }
                 let v = req.spec_version.unwrap_or_default();
                 version.set(if v.is_empty() { "2.0".into() } else { v });
                 show_import.set(false);
@@ -338,129 +414,193 @@ pub fn Create(edit_id: Option<i64>) -> impl IntoView {
 
                 {move || error.get().map(|e| view! { <div class="settings-error">{e}</div> })}
 
-                <div class="create__row">
-                    <div class="create__avatar">
-                        <img class="create__avatarimg"
-                            src=move || {
-                                let a = form.avatar.get();
-                                if a.is_empty() { "https://picsum.photos/seed/new/400/533".to_string() } else { a }
-                            }
-                            alt="avatar preview" />
-                        <label class="avatar-upload">
-                            "\u{1F4F7} Upload"
-                            <input type="file" accept="image/*" class="avatar-file" on:change=on_avatar_file />
-                        </label>
+                // --- Section: Identity ---
+                <section class="create__section">
+                    <div class="create__secthdr">
+                        <h2 class="create__secttitle">"Identity"</h2>
+                        <span class="create__sectsub">"How the character shows up in the gallery."</span>
                     </div>
-
-                    <div class="create__fields">
-                        <label class="settings-row">
-                            <span>"Name *"</span>
-                            <input class="field" placeholder="e.g. Seraphina"
-                                prop:value=move || form.name.get()
-                                on:input=move |ev| form.name.set(event_target_value(&ev)) />
-                        </label>
-                        <label class="settings-row">
-                            <span>"Tagline"<small>" — one-line hook on the card"</small></span>
-                            <input class="field" placeholder="A wandering knight with a secret."
-                                prop:value=move || form.tagline.get()
-                                on:input=move |ev| form.tagline.set(event_target_value(&ev)) />
-                        </label>
-                        <label class="settings-row">
-                            <span>"Avatar URL"<small>" — or use Upload"</small></span>
-                            <input class="field" placeholder="https://..."
-                                prop:value=move || form.avatar.get()
-                                on:input=move |ev| form.avatar.set(event_target_value(&ev)) />
-                        </label>
-                        <div class="create__inline">
-                            <label class="settings-row">
-                                <span>"Creator"</span>
-                                <input class="field" placeholder="you"
-                                    prop:value=move || form.creator.get()
-                                    on:input=move |ev| form.creator.set(event_target_value(&ev)) />
-                            </label>
-                            <label class="settings-row settings-row--check">
-                                <input type="checkbox" prop:checked=move || form.nsfw.get()
-                                    on:change=move |ev| form.nsfw.set(event_target_checked(&ev)) />
-                                <span>"NSFW"</span>
+                    <div class="create__row">
+                        <div class="create__avatar">
+                            <img class="create__avatarimg"
+                                src=move || {
+                                    let a = form.avatar.get();
+                                    if a.is_empty() { "https://picsum.photos/seed/new/400/533".to_string() } else { a }
+                                }
+                                alt="avatar preview" />
+                            <label class="avatar-upload">
+                                "\u{1F4F7} Upload"
+                                <input type="file" accept="image/*" class="avatar-file" on:change=on_avatar_file />
                             </label>
                         </div>
-                        <label class="settings-row">
-                            <span>"Tags"<small>" — comma separated"</small></span>
-                            <input class="field" placeholder="fantasy, knight, romance"
-                                prop:value=move || form.tags.get()
-                                on:input=move |ev| form.tags.set(event_target_value(&ev)) />
-                        </label>
+
+                        <div class="create__fields">
+                            <label class="settings-row">
+                                <span>"Name *"</span>
+                                <input class="field" placeholder="e.g. Seraphina"
+                                    prop:value=move || form.name.get()
+                                    on:input=move |ev| form.name.set(event_target_value(&ev)) />
+                            </label>
+                            <label class="settings-row">
+                                <span>"Tagline"<small>" — one-line hook on the card"</small></span>
+                                <input class="field" placeholder="A wandering knight with a secret."
+                                    prop:value=move || form.tagline.get()
+                                    on:input=move |ev| form.tagline.set(event_target_value(&ev)) />
+                            </label>
+                            <label class="settings-row">
+                                <span>"Avatar URL"<small>" — or use Upload"</small></span>
+                                <input class="field" placeholder="https://..."
+                                    prop:value=move || form.avatar.get()
+                                    on:input=move |ev| form.avatar.set(event_target_value(&ev)) />
+                            </label>
+                            <div class="create__inline">
+                                <label class="settings-row">
+                                    <span>"Creator"</span>
+                                    <input class="field" placeholder="you"
+                                        prop:value=move || form.creator.get()
+                                        on:input=move |ev| form.creator.set(event_target_value(&ev)) />
+                                </label>
+                                <label class="settings-row settings-row--check">
+                                    <input type="checkbox" prop:checked=move || form.nsfw.get()
+                                        on:change=move |ev| form.nsfw.set(event_target_checked(&ev)) />
+                                    <span>"NSFW"</span>
+                                </label>
+                            </div>
+                            <label class="settings-row">
+                                <span>"Tags"<small>" — comma separated"</small></span>
+                                <input class="field" placeholder="fantasy, knight, romance"
+                                    prop:value=move || form.tags.get()
+                                    on:input=move |ev| form.tags.set(event_target_value(&ev)) />
+                            </label>
+                        </div>
                     </div>
-                </div>
+                </section>
 
-                <label class="settings-row">
-                    <span>"Personality"<small>" — core traits & voice"</small></span>
-                    <textarea class="field field--code" rows="4"
-                        prop:value=move || form.personality.get()
-                        on:input=move |ev| form.personality.set(event_target_value(&ev)) ></textarea>
-                </label>
+                // --- Section: Persona ---
+                <section class="create__section">
+                    <div class="create__secthdr">
+                        <h2 class="create__secttitle">"Persona"</h2>
+                        <span class="create__sectsub">"Who they are — sent to the model as context."</span>
+                    </div>
+                    <label class="settings-row">
+                        <span>"Personality"<small>" — core traits & voice"</small></span>
+                        <textarea class="field field--code" rows="4"
+                            prop:value=move || form.personality.get()
+                            on:input=move |ev| form.personality.set(event_target_value(&ev)) ></textarea>
+                    </label>
+                    <label class="settings-row">
+                        <span>"Description"<small>" — background, appearance, world"</small></span>
+                        <textarea class="field field--code" rows="5"
+                            prop:value=move || form.description.get()
+                            on:input=move |ev| form.description.set(event_target_value(&ev)) ></textarea>
+                    </label>
+                    <label class="settings-row">
+                        <span>"Scenario"<small>" — the situation the chat opens in"</small></span>
+                        <textarea class="field field--code" rows="3"
+                            prop:value=move || form.scenario.get()
+                            on:input=move |ev| form.scenario.set(event_target_value(&ev)) ></textarea>
+                    </label>
+                </section>
 
-                <label class="settings-row">
-                    <span>"Description"<small>" — background, appearance, world"</small></span>
-                    <textarea class="field field--code" rows="5"
-                        prop:value=move || form.description.get()
-                        on:input=move |ev| form.description.set(event_target_value(&ev)) ></textarea>
-                </label>
-
-                <label class="settings-row">
-                    <span>"Scenario"<small>" — the situation the chat opens in"</small></span>
-                    <textarea class="field field--code" rows="3"
-                        prop:value=move || form.scenario.get()
-                        on:input=move |ev| form.scenario.set(event_target_value(&ev)) ></textarea>
-                </label>
-
-                <label class="settings-row">
-                    <span>"First message"<small>" — the character's opening line"</small></span>
-                    <textarea class="field field--code" rows="4"
-                        prop:value=move || form.first_message.get()
-                        on:input=move |ev| form.first_message.set(event_target_value(&ev)) ></textarea>
-                </label>
-
-                // --- advanced V2/V3 fields ---
-                {move || is_advanced().then(|| view! {
-                    <div class="create__adv">
-                        <div class="create__advhdr">"Advanced (V2 / V3)"</div>
-
-                        <label class="settings-row">
-                            <span>"Example dialogue"<small>" — shows the model how they talk"</small></span>
-                            <textarea class="field field--code" rows="4"
-                                prop:value=move || form.mes_example.get()
-                                on:input=move |ev| form.mes_example.set(event_target_value(&ev)) ></textarea>
-                        </label>
-
+                // --- Section: Greeting ---
+                <section class="create__section">
+                    <div class="create__secthdr">
+                        <h2 class="create__secttitle">"Greeting"</h2>
+                        <span class="create__sectsub">"The first thing they say when a chat begins."</span>
+                    </div>
+                    <label class="settings-row">
+                        <span>"First message"<small>" — the character's opening line"</small></span>
+                        <textarea class="field field--code" rows="4"
+                            prop:value=move || form.first_message.get()
+                            on:input=move |ev| form.first_message.set(event_target_value(&ev)) ></textarea>
+                    </label>
+                    {move || is_advanced().then(|| view! {
                         <label class="settings-row">
                             <span>"Alternate greetings"<small>" — one per line; swipe between them on a new chat"</small></span>
                             <textarea class="field field--code" rows="3"
                                 prop:value=move || form.alternate_greetings.get()
                                 on:input=move |ev| form.alternate_greetings.set(event_target_value(&ev)) ></textarea>
                         </label>
+                    })}
+                </section>
 
+                // --- Section: Lorebook ---
+                <section class="create__section">
+                    <div class="create__secthdr">
+                        <h2 class="create__secttitle">"\u{1F4D6} Lorebook"</h2>
+                        <span class="create__sectsub">
+                            "World info injected when a keyword is mentioned. Leave keys blank for an always-on entry."
+                        </span>
+                    </div>
+                    <div class="lore">
+                        {move || {
+                            let empty = form.lore.get().is_empty();
+                            empty.then(|| view! {
+                                <div class="lore__empty">"No entries yet — add lore the model should know about your world."</div>
+                            })
+                        }}
+                        <For
+                            each=move || form.lore.get()
+                            key=|r| r.id
+                            children=move |r: LoreRow| {
+                                view! {
+                                    <div class="lore__entry" class=("lore__entry--off", move || !r.enabled.get())>
+                                        <div class="lore__top">
+                                            <input class="field lore__keys" placeholder="keys, comma, separated"
+                                                prop:value=move || r.keys.get()
+                                                on:input=move |ev| r.keys.set(event_target_value(&ev)) />
+                                            <label class="lore__toggle" title="Enable / disable this entry">
+                                                <input type="checkbox" prop:checked=move || r.enabled.get()
+                                                    on:change=move |ev| r.enabled.set(event_target_checked(&ev)) />
+                                                <span>"On"</span>
+                                            </label>
+                                            <button class="lore__del" title="Remove entry"
+                                                on:click=move |_| remove_lore(r.id)>"\u{1F5D1}"</button>
+                                        </div>
+                                        <textarea class="field field--code lore__content" rows="3"
+                                            placeholder="What the model should know when these keys come up..."
+                                            prop:value=move || r.content.get()
+                                            on:input=move |ev| r.content.set(event_target_value(&ev)) ></textarea>
+                                    </div>
+                                }
+                            }
+                        />
+                        <button class="btn lore__add" on:click=add_lore>"\u{2795} Add lore entry"</button>
+                    </div>
+                </section>
+
+                // --- Section: Advanced (V2/V3) ---
+                {move || is_advanced().then(|| view! {
+                    <section class="create__section">
+                        <div class="create__secthdr">
+                            <h2 class="create__secttitle">"Advanced"</h2>
+                            <span class="create__sectsub">"V2 / V3 card fields for fine-grained control."</span>
+                        </div>
+                        <label class="settings-row">
+                            <span>"Example dialogue"<small>" — shows the model how they talk"</small></span>
+                            <textarea class="field field--code" rows="4"
+                                prop:value=move || form.mes_example.get()
+                                on:input=move |ev| form.mes_example.set(event_target_value(&ev)) ></textarea>
+                        </label>
                         <label class="settings-row">
                             <span>"System prompt"<small>" — character-level instructions to the model"</small></span>
                             <textarea class="field field--code" rows="3"
                                 prop:value=move || form.system_prompt.get()
                                 on:input=move |ev| form.system_prompt.set(event_target_value(&ev)) ></textarea>
                         </label>
-
                         <label class="settings-row">
                             <span>"Post-history instructions"<small>" — reinforced after the chat (UJB)"</small></span>
                             <textarea class="field field--code" rows="3"
                                 prop:value=move || form.post_history_instructions.get()
                                 on:input=move |ev| form.post_history_instructions.set(event_target_value(&ev)) ></textarea>
                         </label>
-
                         <label class="settings-row">
                             <span>"Creator notes"<small>" — not sent to the model"</small></span>
                             <textarea class="field field--code" rows="2"
                                 prop:value=move || form.creator_notes.get()
                                 on:input=move |ev| form.creator_notes.set(event_target_value(&ev)) ></textarea>
                         </label>
-                    </div>
+                    </section>
                 })}
 
                 <div class="create__actions">

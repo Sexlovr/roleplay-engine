@@ -12,7 +12,7 @@ use serde::Serialize;
 
 use shared::dto::{
     ChatDetail, ChatListEntry, EditMessageReq, HealthResp, ImportCardReq, NewCharacterReq,
-    SelectVariantReq, SendMessageReq, SendMessageResp, SettingsReq, SettingsResp,
+    RenameChatReq, SelectVariantReq, SendMessageReq, SendMessageResp, SettingsReq, SettingsResp,
     UpdateCharacterReq, UpdateMemoryReq,
 };
 use shared::types::Character;
@@ -132,6 +132,18 @@ pub async fn delete_character(id: i64) -> Result<(), String> {
 
 pub async fn list_chats_for(character_id: i64) -> Result<Vec<ChatListEntry>, String> {
     get(&format!("/api/characters/{character_id}/chats")).await
+}
+
+/// All recent chats across every character (newest first) for the Chats tab.
+pub async fn list_recent_chats() -> Result<Vec<ChatListEntry>, String> {
+    get("/api/chats").await
+}
+
+/// Rename a chat session.
+pub async fn rename_chat(id: i64, title: String) -> Result<(), String> {
+    let _: serde_json::Value =
+        send_with_body("PUT", &format!("/api/chats/{id}/title"), &RenameChatReq { title }).await?;
+    Ok(())
 }
 
 /// Start a fresh chat with a character (seeds the greeting as message #1).

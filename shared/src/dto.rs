@@ -99,6 +99,21 @@ pub struct ChatListEntry {
     pub character_name: String,
     pub title: String,
     pub updated_at: i64,
+    /// Character avatar (data-URL or image URL) for the list row.
+    #[serde(default)]
+    pub avatar: String,
+    /// Snippet of the most recent message in the chat (for the list row).
+    #[serde(default)]
+    pub last_message: String,
+    /// Whether that last message was from the user.
+    #[serde(default)]
+    pub last_from_user: bool,
+}
+
+/// Rename a chat session.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RenameChatReq {
+    pub title: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

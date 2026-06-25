@@ -86,10 +86,12 @@ async fn main() {
             "/api/characters/{id}/chats",
             get(routes::chats::list_for_character).post(routes::chats::create_chat),
         )
+        .route("/api/chats", get(routes::chats::list_recent))
         .route(
             "/api/chats/{id}",
             get(routes::chats::get_chat).delete(routes::chats::delete_chat),
         )
+        .route("/api/chats/{id}/title", axum::routing::put(routes::chats::rename))
         .route("/api/chats/{id}/memory", axum::routing::put(routes::chats::update_memory))
         .route("/api/chats/{id}/send", axum::routing::post(routes::chats::send))
         .route(

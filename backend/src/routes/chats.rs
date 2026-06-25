@@ -2,7 +2,8 @@ use axum::extract::{Path, State};
 use axum::Json;
 
 use shared::dto::{
-    ChatDetail, ChatListEntry, MessageView, SendMessageReq, SendMessageResp, UpdateMemoryReq,
+    ChatDetail, ChatListEntry, MessageView, RenameChatReq, SendMessageReq, SendMessageResp,
+    UpdateMemoryReq,
 };
 use shared::template::ChatMessage;
 use shared::types::{Chat, Character};
@@ -12,6 +13,27 @@ use crate::error::AppError;
 use crate::llm;
 use crate::state::AppState;
 
+/// The SELECT columns shared by both chat-list queries. The two correlated
+/// subqueries pull the most-recent message text + sender so each list row can
+/// show a preview snippet without a second round-trip.
+const CHAT_LIST_COLUMNS: &str = "c.id, c.character_id, ch.name, ch.avatar, c.title, c.updated_at, \
+     COALESCE((SELECT text FROM messages WHERE chat_id=c.id ORDER BY id DESC LIMIT 1), ''), \
+     COALESCE((SELECT from_user FROM messages WHERE chat_id=c.id ORDER BY id DESC LIMIT 1), 0)";
+
+/// Map a row selected with [`CHAT_LIST_COLUMNS`] into a [`ChatListEntry`].
+fn row_to_chat_entry(row: &rusqlite::Row) -> rusqlite::Result<ChatListEntry> {
+    Ok(ChatListEntry {
+        id: row.get(0)?,
+        character_id: row.get(1)?,
+        character_name: row.get(2)?,
+        avatar: row.get(3)?,
+        title: row.get(4)?,
+        updated_at: row.get(5)?,
+        last_message: row.get(6)?,
+        last_from_user: row.get::<_, i64>(7)? != 0,
+    })
+}
+
 /// GET /api/characters/{cid}/chats — list chats for a character.
 pub async fn list_for_character(
     State(state): State<AppState>,
@@ -20,24 +42,58 @@ pub async fn list_for_character(
     let pool = state.pool.clone();
     tokio::task::spawn_blocking(move || -> Result<Json<Vec<ChatListEntry>>, AppError> {
         let conn = pool.get()?;
-        let mut stmt = conn.prepare(
-            "SELECT c.id, c.character_id, ch.name, c.title, c.updated_at
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {CHAT_LIST_COLUMNS}
              FROM chats c JOIN characters ch ON ch.id = c.character_id
              WHERE c.character_id=?1
-             ORDER BY c.updated_at DESC",
-        )?;
-        let rows = stmt.query_map([cid], |row| {
-            Ok(ChatListEntry {
-                id: row.get(0)?,
-                character_id: row.get(1)?,
-                character_name: row.get(2)?,
-                title: row.get(3)?,
-                updated_at: row.get(4)?,
-            })
-        })?;
+             ORDER BY c.updated_at DESC"
+        ))?;
+        let rows = stmt.query_map([cid], row_to_chat_entry)?;
         rows.collect::<Result<Vec<_>, _>>()
             .map(Json)
             .map_err(Into::into)
+    })
+    .await
+    .map_err(|e| AppError::Internal(format!("join: {e}")))?
+}
+
+/// GET /api/chats — recent chats across every character (newest first), for the
+/// global "Chats" tab. Capped so a long history can't balloon the payload.
+pub async fn list_recent(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<ChatListEntry>>, AppError> {
+    let pool = state.pool.clone();
+    tokio::task::spawn_blocking(move || -> Result<Json<Vec<ChatListEntry>>, AppError> {
+        let conn = pool.get()?;
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {CHAT_LIST_COLUMNS}
+             FROM chats c JOIN characters ch ON ch.id = c.character_id
+             ORDER BY c.updated_at DESC
+             LIMIT 200"
+        ))?;
+        let rows = stmt.query_map([], row_to_chat_entry)?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map(Json)
+            .map_err(Into::into)
+    })
+    .await
+    .map_err(|e| AppError::Internal(format!("join: {e}")))?
+}
+
+/// PUT /api/chats/{id}/title — rename a chat session.
+pub async fn rename(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Json(body): Json<RenameChatReq>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let pool = state.pool.clone();
+    tokio::task::spawn_blocking(move || -> Result<Json<serde_json::Value>, AppError> {
+        let conn = pool.get()?;
+        conn.execute(
+            "UPDATE chats SET title=?1 WHERE id=?2",
+            rusqlite::params![body.title.trim(), id],
+        )?;
+        Ok(Json(serde_json::json!({"ok": true})))
     })
     .await
     .map_err(|e| AppError::Internal(format!("join: {e}")))?

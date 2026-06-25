@@ -9,6 +9,7 @@
 mod api;
 mod character;
 mod chat;
+mod chats;
 mod create;
 mod header;
 mod home;
@@ -16,6 +17,7 @@ mod markdown;
 mod persona;
 mod settings;
 mod upload;
+mod util;
 
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
@@ -25,8 +27,9 @@ use shared::types::Persona;
 
 use character::CharacterPage;
 use chat::Chat;
+use chats::Chats;
 use create::Create;
-use header::Header;
+use header::Sidebar;
 use home::Home;
 
 /// Which screen is currently shown. Stored as `RwSignal<Page>` in context;
@@ -35,6 +38,7 @@ use home::Home;
 #[derive(Clone, Debug, PartialEq)]
 pub enum Page {
     Home,
+    Chats,          // global recent-conversations tab
     Character(i64), // character id — detail page
     Chat(i64),      // chat id (a started conversation)
     Create,
@@ -103,16 +107,21 @@ fn App() -> impl IntoView {
     let persona_open = use_context::<PersonaOpen>().unwrap().0;
 
     view! {
-        <Header/>
-        <main class="content">
-            {move || match page.get() {
-                Page::Home => view! { <Home/> }.into_any(),
-                Page::Character(id) => view! { <CharacterPage id=id/> }.into_any(),
-                Page::Chat(id) => view! { <Chat id=id/> }.into_any(),
-                Page::Create => view! { <Create edit_id=None/> }.into_any(),
-                Page::Edit(id) => view! { <Create edit_id=Some(id)/> }.into_any(),
-            }}
-        </main>
+        <div class="shell">
+            <Sidebar/>
+            <main class="shell__main">
+                {move || match page.get() {
+                    Page::Home => view! { <div class="content"><Home/></div> }.into_any(),
+                    Page::Chats => view! { <div class="content"><Chats/></div> }.into_any(),
+                    Page::Character(id) => view! { <div class="content"><CharacterPage id=id/></div> }.into_any(),
+                    // The chat view owns the full viewport height (its own internal
+                    // scroll); skip the padded `.content` wrapper.
+                    Page::Chat(id) => view! { <div class="content content--chat"><Chat id=id/></div> }.into_any(),
+                    Page::Create => view! { <div class="content"><Create edit_id=None/></div> }.into_any(),
+                    Page::Edit(id) => view! { <div class="content"><Create edit_id=Some(id)/></div> }.into_any(),
+                }}
+            </main>
+        </div>
         {move || settings_open.get().then(|| view! { <settings::Settings/> })}
         {move || persona_open.get().then(|| view! { <persona::PersonaEditor/> })}
     }

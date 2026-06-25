@@ -49,6 +49,11 @@ pub fn Chat(id: i64) -> impl IntoView {
     let character_name = RwSignal::new(String::new());
     let character_avatar = RwSignal::new(String::new());
     let character_creator = RwSignal::new(String::new());
+    let character_id = RwSignal::new(0i64);
+    // Editable per-chat title (defaults to the character name on the server).
+    let chat_title = RwSignal::new(String::new());
+    let editing_title = RwSignal::new(false);
+    let title_draft = RwSignal::new(String::new());
     let loaded = RwSignal::new(false);
 
     // When the server data arrives, hydrate local state.
@@ -57,9 +62,11 @@ pub fn Chat(id: i64) -> impl IntoView {
             if !loaded.get_untracked() {
                 messages.set(detail.messages);
                 memory.set(detail.chat.memory.clone());
+                chat_title.set(detail.chat.title.clone());
                 character_name.set(detail.character.name.clone());
                 character_avatar.set(detail.character.avatar.clone());
                 character_creator.set(detail.character.creator.clone());
+                character_id.set(detail.character.id);
                 loaded.set(true);
             }
         }
@@ -257,6 +264,18 @@ pub fn Chat(id: i64) -> impl IntoView {
         });
     };
 
+    let save_title = move || {
+        editing_title.set(false);
+        let t = title_draft.get_untracked().trim().to_string();
+        if t.is_empty() || t == chat_title.get_untracked() {
+            return;
+        }
+        chat_title.set(t.clone());
+        spawn_local(async move {
+            let _ = api::rename_chat(id, t).await;
+        });
+    };
+
     // ---- view helpers ----
 
     let log_view = move || {
@@ -389,10 +408,7 @@ pub fn Chat(id: i64) -> impl IntoView {
                     }.into_any();
                 }
 
-                let name = character_name.get();
                 let avatar = character_avatar.get();
-                let creator = character_creator.get();
-                let creator_label = if creator.is_empty() { String::new() } else { format!("by {}", creator) };
 
                 // Memory panel
                 let memory_open = RwSignal::new(false);
@@ -400,13 +416,43 @@ pub fn Chat(id: i64) -> impl IntoView {
                 view! {
                     <div class="chat">
                         <div class="chat__topbar">
-                            <button class="chat__back" on:click=move |_| page.set(Page::Home)>
+                            <button class="chat__back" title="Back to character"
+                                on:click=move |_| page.set(Page::Character(character_id.get()))>
                                 "\u{2190}"
                             </button>
-                            <img class="chat__avatar" src=avatar alt="" />
+                            <img class="chat__avatar" src=avatar alt=""
+                                on:click=move |_| page.set(Page::Character(character_id.get())) />
                             <div class="chat__title">
-                                <span class="chat__name">{name}</span>
-                                <span class="chat__creator">{creator_label}</span>
+                                {move || if editing_title.get() {
+                                    view! {
+                                        <input class="chat__titleinput" autofocus=true
+                                            prop:value=move || title_draft.get()
+                                            on:input=move |ev| title_draft.set(event_target_value(&ev))
+                                            on:blur=move |_| save_title()
+                                            on:keydown=move |ev| {
+                                                if ev.key() == "Enter" { ev.prevent_default(); save_title(); }
+                                                else if ev.key() == "Escape" { editing_title.set(false); }
+                                            } />
+                                    }.into_any()
+                                } else {
+                                    view! {
+                                        <span class="chat__name" title="Click to rename"
+                                            on:click=move |_| {
+                                                let cur = chat_title.get();
+                                                title_draft.set(if cur.trim().is_empty() { character_name.get() } else { cur });
+                                                editing_title.set(true);
+                                            }>
+                                            {move || {
+                                                let t = chat_title.get();
+                                                if t.trim().is_empty() { character_name.get() } else { t }
+                                            }}
+                                        </span>
+                                    }.into_any()
+                                }}
+                                <span class="chat__creator">{move || {
+                                    let n = character_name.get();
+                                    if n.is_empty() { String::new() } else { format!("with {n}") }
+                                }}</span>
                             </div>
                             <button class="chat__model" on:click=move |_| settings_open.set(true)>
                                 {model_label}
