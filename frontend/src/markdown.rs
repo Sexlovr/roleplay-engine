@@ -12,6 +12,64 @@
 
 use leptos::prelude::*;
 
+/// Split a bot message into `(thinking, answer)`. Models emit chain-of-thought
+/// wrapped in `<think>…</think>` or `<thinking>…</thinking>`; we pull every such
+/// block out of the visible answer and concatenate them so the caller can show
+/// the reasoning in a collapsed box instead of dumping it inline.
+///
+/// A still-streaming, *unclosed* `<think>` (opening tag with no closing tag yet)
+/// is treated as all-thinking with an empty answer, so live reasoning lands in
+/// the box and the bubble stays empty until the model starts answering.
+pub fn split_thinking(text: &str) -> (Option<String>, String) {
+    let lower = text.to_ascii_lowercase();
+    if !lower.contains("<think") {
+        return (None, text.to_string());
+    }
+    let mut thinking = String::new();
+    let mut answer = String::new();
+    let mut rest = text;
+    let mut lrest = lower.as_str();
+
+    loop {
+        // Find the next opening tag (either spelling) in the lowercased mirror,
+        // which is byte-aligned with `rest` (ASCII tags, 1:1 byte mapping).
+        let open_rel = lrest.find("<think>").map(|p| (p, 7))
+            .into_iter()
+            .chain(lrest.find("<thinking>").map(|p| (p, 10)))
+            .min_by_key(|(p, _)| *p);
+        let Some((open, open_len)) = open_rel else {
+            answer.push_str(rest);
+            break;
+        };
+        // Text before the tag is part of the answer.
+        answer.push_str(&rest[..open]);
+        let after_open = open + open_len;
+        let body = &lrest[after_open..];
+        // Closing tag (either spelling).
+        let close_rel = body.find("</think>").map(|p| (p, 8))
+            .into_iter()
+            .chain(body.find("</thinking>").map(|p| (p, 11)))
+            .min_by_key(|(p, _)| *p);
+        match close_rel {
+            Some((close, close_len)) => {
+                thinking.push_str(rest[after_open..after_open + close].trim());
+                thinking.push('\n');
+                let next = after_open + close + close_len;
+                rest = &rest[next..];
+                lrest = &lrest[next..];
+            }
+            None => {
+                // Unclosed (still streaming) — everything left is reasoning.
+                thinking.push_str(rest[after_open..].trim());
+                break;
+            }
+        }
+    }
+
+    let t = thinking.trim().to_string();
+    (if t.is_empty() { None } else { Some(t) }, answer.trim().to_string())
+}
+
 /// An inline node within a line of text.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Inline {

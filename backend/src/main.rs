@@ -95,8 +95,16 @@ async fn main() {
         .route("/api/chats/{id}/memory", axum::routing::put(routes::chats::update_memory))
         .route("/api/chats/{id}/send", axum::routing::post(routes::chats::send))
         .route(
+            "/api/chats/{id}/send/stream",
+            axum::routing::post(routes::chats::send_stream),
+        )
+        .route(
             "/api/chats/{id}/regenerate",
             axum::routing::post(routes::chats::regenerate),
+        )
+        .route(
+            "/api/chats/{id}/regenerate/stream",
+            axum::routing::post(routes::chats::regenerate_stream),
         )
         .route(
             "/api/messages/{id}",

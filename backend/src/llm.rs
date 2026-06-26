@@ -271,6 +271,157 @@ pub async fn complete(
     send_request(client, req, &cfg.response_path).await
 }
 
+/// Streaming completion. Same prep as [`complete`] (config, key rotation,
+/// context truncation, request rendering), but injects `"stream": true` and
+/// parses the upstream OpenAI-style SSE, forwarding each text chunk through
+/// `tx` as a [`StreamMsg::Delta`]. Reasoning chunks (`delta.reasoning_content`
+/// / `delta.reasoning`) are wrapped in `<think>…</think>` so the frontend's
+/// existing thinking-box splitter renders them collapsed, live.
+///
+/// Returns the full accumulated reply text (think-tags included, exactly as it
+/// will be persisted). For non-OpenAI-shaped configs — or when the upstream
+/// ignores `stream` and returns a single JSON body — it falls back to a single
+/// extraction so the reply is never silently lost.
+pub async fn stream_complete(
+    pool: &Pool<SqliteConnectionManager>,
+    client: &reqwest::Client,
+    history: &[ChatMessage],
+    system: &str,
+    post_history: &str,
+    tx: &tokio::sync::mpsc::UnboundedSender<shared::dto::StreamMsg>,
+) -> Result<String, String> {
+    use futures_util::StreamExt;
+    use shared::dto::StreamMsg;
+
+    let mut cfg = crate::routes::settings::load_active_proxy(pool);
+    if cfg.url.trim().is_empty() {
+        return Err("No API endpoint configured. Open Settings to point me at your proxy/API.".into());
+    }
+    let system: String = if cfg.system_prompt.trim().is_empty() {
+        system.to_string()
+    } else {
+        format!("{}\n\n{}", cfg.system_prompt.trim(), system)
+    };
+    resolve_key(&mut cfg);
+    let history = if cfg.context_tokens > 0 {
+        let sys_tokens = est_tokens(&system).min(cfg.context_tokens);
+        let hist_limit = cfg.context_tokens - sys_tokens;
+        truncate_history(history, hist_limit)
+    } else {
+        history.to_vec()
+    };
+    let req = template::build_request(&cfg, &history, &system, post_history)?;
+
+    // Non-OpenAI shapes (Anthropic/Gemini/custom) use a different SSE format we
+    // don't parse — fall back to one non-streaming call, emitted as a single
+    // chunk so the bubble still fills in.
+    let Some((content_path, reasoning_content_path, reasoning_path)) = template::stream_paths(&cfg)
+    else {
+        let full = send_request(client, req, &cfg.response_path).await?;
+        let _ = tx.send(StreamMsg::Delta { v: full.clone() });
+        return Ok(full);
+    };
+
+    let body = template::inject_stream(&req.body);
+    let mut builder = client.post(&req.url).header("Content-Type", "application/json");
+    for (k, v) in &req.headers {
+        builder = builder.header(k, v);
+    }
+    let resp = builder
+        .body(body)
+        .send()
+        .await
+        .map_err(|e| format!("network error: {e}"))?;
+    let status = resp.status();
+    if !status.is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        return Err(format!("HTTP {}: {}", status, template::truncate(&text, 300)));
+    }
+
+    let mut stream = resp.bytes_stream();
+    let mut buf: Vec<u8> = Vec::new();
+    let mut full = String::new();
+    let mut in_think = false;
+    // Lines that weren't SSE `data:` frames — kept so a provider that ignored
+    // `stream` and returned a single JSON body can still be extracted at the end.
+    let mut nondata = String::new();
+
+    // Append a chunk to both the persisted text and the live wire.
+    macro_rules! emit {
+        ($s:expr) => {{
+            let s: &str = $s;
+            if !s.is_empty() {
+                full.push_str(s);
+                let _ = tx.send(StreamMsg::Delta { v: s.to_string() });
+            }
+        }};
+    }
+
+    'outer: while let Some(chunk) = stream.next().await {
+        let bytes = chunk.map_err(|e| format!("stream error: {e}"))?;
+        buf.extend_from_slice(&bytes);
+        while let Some(pos) = buf.iter().position(|&b| b == b'\n') {
+            let line: Vec<u8> = buf.drain(..=pos).collect();
+            let line = String::from_utf8_lossy(&line);
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            let Some(data) = line.strip_prefix("data:") else {
+                nondata.push_str(line);
+                nondata.push('\n');
+                continue;
+            };
+            let data = data.trim();
+            if data == "[DONE]" {
+                break 'outer;
+            }
+            let Ok(val) = serde_json::from_str::<serde_json::Value>(data) else {
+                continue;
+            };
+            // Reasoning precedes the answer; open/close the think wrapper as we
+            // cross between the two.
+            let reasoning = template::extract(&val, &reasoning_content_path)
+                .or_else(|| template::extract(&val, &reasoning_path));
+            if let Some(r) = reasoning {
+                if !r.is_empty() {
+                    if !in_think {
+                        emit!("<think>");
+                        in_think = true;
+                    }
+                    emit!(&r);
+                }
+            }
+            if let Some(c) = template::extract(&val, &content_path) {
+                if !c.is_empty() {
+                    if in_think {
+                        emit!("</think>");
+                        in_think = false;
+                    }
+                    emit!(&c);
+                }
+            }
+        }
+    }
+    if in_think {
+        emit!("</think>");
+    }
+
+    // Upstream ignored streaming and sent a single JSON body — extract it once.
+    if full.is_empty() && !nondata.trim().is_empty() {
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(nondata.trim()) {
+            if let Some(text) = template::extract(&val, &cfg.response_path) {
+                emit!(&text);
+            }
+        }
+    }
+
+    if full.trim().is_empty() {
+        return Err("The model returned an empty response.".into());
+    }
+    Ok(full)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

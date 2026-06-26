@@ -82,6 +82,7 @@ pub fn Sidebar() -> impl IntoView {
                     on:click=move |_| nsfw.update(|v| *v = !*v)>
                     "NSFW"
                 </button>
+                <crate::theme::ThemePicker/>
             </div>
         </aside>
     }
@@ -97,6 +98,9 @@ pub fn MobileBar() -> impl IntoView {
     let mobile_open = use_context::<crate::MobileNavOpen>().unwrap().0;
 
     view! {
+        // The chat view has its own compact top bar (back + character + menu), so
+        // the global app bar is suppressed there to avoid a stacked double bar.
+        <Show when=move || !matches!(page.get(), Page::Chat(_))>
         <header class="appbar">
             <button class="appbar__burger" aria-label="Open menu"
                 on:click=move |_| mobile_open.update(|v| *v = !*v)>
@@ -111,5 +115,6 @@ pub fn MobileBar() -> impl IntoView {
                 "\u{2699}"
             </button>
         </header>
+        </Show>
     }
 }

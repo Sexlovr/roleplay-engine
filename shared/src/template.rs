@@ -252,6 +252,59 @@ pub fn truncate(s: &str, n: usize) -> String {
     format!("{}…", &s[..end])
 }
 
+/// Whether this config's response shape is OpenAI-style chat-completions, which
+/// is the format we know how to stream (SSE `data:` lines carrying
+/// `choices.0.delta.content`). Detected by a `message` segment in the response
+/// path (`choices.0.message.content`). Anthropic (`content.0.text`) and Gemini
+/// (`candidates…`) use different SSE shapes, so streaming falls back to a single
+/// non-streaming call for them.
+pub fn supports_stream(cfg: &ProxyConfig) -> bool {
+    cfg.response_path.split('.').any(|s| s == "message")
+}
+
+/// Insert `"stream": true` into an already-rendered JSON request body. Returns
+/// the body unchanged if it doesn't parse as a JSON object (the caller has
+/// already validated it, so this is just defensive).
+pub fn inject_stream(body: &str) -> String {
+    match serde_json::from_str::<Value>(body) {
+        Ok(Value::Object(mut m)) => {
+            m.insert("stream".into(), Value::Bool(true));
+            Value::Object(m).to_string()
+        }
+        _ => body.to_string(),
+    }
+}
+
+/// Derive the per-chunk delta paths for an OpenAI-style streaming response from
+/// the configured (non-stream) `response_path`. Returns
+/// `(content, reasoning_content, reasoning)`:
+///   `choices.0.message.content` → content `choices.0.delta.content`,
+///   reasoning `choices.0.delta.reasoning_content` / `choices.0.delta.reasoning`.
+/// `None` when the config isn't OpenAI-shaped (see [`supports_stream`]).
+pub fn stream_paths(cfg: &ProxyConfig) -> Option<(String, String, String)> {
+    let segs: Vec<&str> = cfg.response_path.split('.').collect();
+    if !segs.iter().any(|s| *s == "message") {
+        return None;
+    }
+    // message → delta gives the content path.
+    let content = segs
+        .iter()
+        .map(|s| if *s == "message" { "delta" } else { *s })
+        .collect::<Vec<_>>()
+        .join(".");
+    // Reasoning fields sit beside content under the same `delta` object.
+    let swap_last = |last: &str| -> String {
+        let mut parts: Vec<&str> = content.split('.').collect();
+        if let Some(end) = parts.last_mut() {
+            *end = last;
+        }
+        parts.join(".")
+    };
+    let reasoning_content = swap_last("reasoning_content");
+    let reasoning = swap_last("reasoning");
+    Some((content, reasoning_content, reasoning))
+}
+
 /// The result of rendering a template: a fully-resolved HTTP request.
 #[derive(Clone, Debug)]
 pub struct RenderedRequest {
@@ -381,6 +434,30 @@ mod tests {
     fn truncate_ascii() {
         assert_eq!(truncate("hello", 3), "hel…");
         assert_eq!(truncate("hi", 10), "hi");
+    }
+
+    #[test]
+    fn stream_detection_and_paths() {
+        let oa = ProxyConfig::openai();
+        assert!(supports_stream(&oa));
+        let (c, rc, r) = stream_paths(&oa).unwrap();
+        assert_eq!(c, "choices.0.delta.content");
+        assert_eq!(rc, "choices.0.delta.reasoning_content");
+        assert_eq!(r, "choices.0.delta.reasoning");
+        // Anthropic / Gemini aren't OpenAI-shaped → no streaming paths.
+        assert!(!supports_stream(&ProxyConfig::anthropic()));
+        assert!(stream_paths(&ProxyConfig::anthropic()).is_none());
+        assert!(!supports_stream(&ProxyConfig::gemini()));
+    }
+
+    #[test]
+    fn inject_stream_adds_flag() {
+        let out = inject_stream(r#"{"model":"x","messages":[]}"#);
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["stream"], Value::Bool(true));
+        assert_eq!(v["model"], "x");
+        // Non-object passes through unchanged.
+        assert_eq!(inject_stream("[1,2]"), "[1,2]");
     }
 
     #[test]

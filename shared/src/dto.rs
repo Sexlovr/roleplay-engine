@@ -172,6 +172,33 @@ pub struct EditMessageReq {
     pub text: String,
 }
 
+/// One frame of a streaming generation, sent as a newline-delimited JSON line
+/// (NDJSON) from `/api/chats/{id}/send/stream` and `/regenerate/stream`.
+///
+/// NDJSON (not SSE) so a token containing a newline is carried safely inside the
+/// JSON-escaped `v` string. The tag field `t` selects the variant:
+///   `user`  — the persisted id of the just-saved user message (sent first, so
+///             the client can reconcile its optimistic bubble).
+///   `delta` — an incremental chunk of the assistant reply. Reasoning chunks are
+///             wrapped in `<think>…</think>` so the existing thinking-box splitter
+///             renders them collapsed, live.
+///   `done`  — terminal success: the persisted reply id + all swipe variants.
+///   `error` — terminal failure: a human-readable message (shown as a banner).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "t", rename_all = "lowercase")]
+pub enum StreamMsg {
+    User { id: i64 },
+    Delta { v: String },
+    Done {
+        id: i64,
+        #[serde(default)]
+        variants: Vec<String>,
+        #[serde(default)]
+        variant: i64,
+    },
+    Error { v: String },
+}
+
 /// Select which stored variant (swipe) of a message is active.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SelectVariantReq {

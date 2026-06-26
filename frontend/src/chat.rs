@@ -9,16 +9,36 @@ use leptos::html::Div;
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
-use shared::dto::MessageView;
+use shared::dto::{MessageView, StreamMsg};
 
 use crate::api;
-use crate::markdown::render_message;
+use crate::markdown::{render_message, split_thinking};
 use crate::Page;
 
-/// Render message text as inline markdown (`*em*`, `**strong**`, `` `code` ``,
-/// `> quote`, `![](img)`). Wrapped in `.msg__text` for layout.
+/// Render a *user* message: inline markdown only (no thinking blocks).
 fn render_text(text: &str) -> AnyView {
     view! { <span class="msg__text">{render_message(text)}</span> }.into_any()
+}
+
+/// Render a *bot* message: pull any `<think>…</think>` reasoning into a collapsed
+/// `<details>` box above the answer, then render the answer as markdown.
+fn render_bot(text: &str) -> AnyView {
+    let (thinking, answer) = split_thinking(text);
+    let think_box = thinking.map(|t| {
+        view! {
+            <details class="msg__think">
+                <summary class="msg__think-sum">
+                    <span class="msg__think-ic">"\u{1F4AD}"</span>
+                    "Thought process"
+                </summary>
+                <div class="msg__think-body">{render_message(&t)}</div>
+            </details>
+        }
+    });
+    // A pure-reasoning chunk (still streaming, no answer yet) shows just the box.
+    let answer_view = (!answer.trim().is_empty())
+        .then(|| view! { <span class="msg__text">{render_message(&answer)}</span> });
+    view! { {think_box} {answer_view} }.into_any()
 }
 
 #[component]
@@ -27,12 +47,17 @@ pub fn Chat(id: i64) -> impl IntoView {
 
     let settings_open = use_context::<crate::SettingsOpen>().unwrap().0;
     let persona_open = use_context::<crate::PersonaOpen>().unwrap().0;
+    let nsfw = use_context::<crate::NsfwEnabled>().unwrap().0;
+    let stream_on = use_context::<crate::theme::StreamCtx>().unwrap().0;
 
     let draft = RwSignal::new(String::new());
     let memory = RwSignal::new(String::new());
     let editing: RwSignal<Option<i64>> = RwSignal::new(None); // message id being edited
     let edit_draft = RwSignal::new(String::new());
     let sending = RwSignal::new(false);
+    // Set true to ask an in-flight streaming generation to stop (polled by the
+    // stream reader; the server still finishes + persists the reply).
+    let stop_stream = RwSignal::new(false);
     // Transient LLM/upstream error shown as a dismissable banner above the
     // composer — never written into the message log (so it can't pollute swipe
     // variants or be mistaken for a real reply).
@@ -92,41 +117,92 @@ pub fn Chat(id: i64) -> impl IntoView {
         }
         draft.set(String::new());
         err_banner.set(None);
+        let streaming = stream_on.get_untracked();
         // Optimistic: show the user message immediately.
         messages.update(|l| l.push(MessageView {
             id: 0, from_user: true, text: text.clone(), variants: Vec::new(), variant: 0,
         }));
-        // In-flight placeholder.
+        // In-flight bot placeholder — empty when streaming (it fills token by
+        // token), an ellipsis otherwise.
+        let ph = if streaming { String::new() } else { "\u{2026}".to_string() };
         messages.update(|l| l.push(MessageView {
-            id: -1, from_user: false, text: "\u{2026}".into(), variants: Vec::new(), variant: 0,
+            id: -1, from_user: false, text: ph, variants: Vec::new(), variant: 0,
         }));
         sending.set(true);
 
-        spawn_local(async move {
-            let res = api::send_message(id, text.clone()).await;
-            sending.set(false);
-            // Drop the placeholder + optimistic user message before reconciling.
-            messages.update(|l| l.retain(|m| m.id != -1 && m.id != 0));
-            match res {
-                Ok(resp) => {
-                    messages.update(|l| l.push(resp.user));
-                    if let Some(reply) = resp.reply {
-                        messages.update(|l| l.push(reply));
-                    }
-                    if let Some(err) = resp.error {
-                        // LLM/upstream failure: the user message IS saved, but no
-                        // reply was generated. Banner offers Retry (regenerate).
-                        err_banner.set(Some(err));
-                    }
-                }
-                Err(e) => {
-                    // Network / backend error: the user message wasn't saved.
-                    // Restore the draft so nothing is lost.
-                    draft.set(text);
+        if streaming {
+            stop_stream.set(false);
+            spawn_local(async move {
+                let url = format!("/api/chats/{id}/send/stream");
+                let res = crate::stream::stream_post(
+                    &url,
+                    serde_json::json!({ "text": text }),
+                    move |msg| match msg {
+                        // Reconcile the optimistic user bubble's id.
+                        StreamMsg::User { id: uid } => messages.update(|l| {
+                            if let Some(m) = l.iter_mut().find(|m| m.id == 0 && m.from_user) {
+                                m.id = uid;
+                            }
+                        }),
+                        StreamMsg::Delta { v } => messages.update(|l| {
+                            if let Some(m) = l.iter_mut().find(|m| m.id == -1) {
+                                m.text.push_str(&v);
+                            }
+                        }),
+                        StreamMsg::Done { id: rid, variants, variant } => messages.update(|l| {
+                            if let Some(m) = l.iter_mut().find(|m| m.id == -1) {
+                                m.id = rid;
+                                if !variants.is_empty() {
+                                    m.variant = variant;
+                                    if let Some(t) = variants.get(variant.max(0) as usize) {
+                                        m.text = t.clone();
+                                    }
+                                    m.variants = variants;
+                                }
+                            }
+                        }),
+                        StreamMsg::Error { v } => err_banner.set(Some(v)),
+                    },
+                    move || stop_stream.get_untracked(),
+                )
+                .await;
+                sending.set(false);
+                // Drop an empty placeholder (errored before any token). A
+                // non-empty one that never got `done` (the user tapped Stop)
+                // stays as the partial — the server saved the full reply, which
+                // appears on reload.
+                messages.update(|l| l.retain(|m| !(m.id == -1 && m.text.trim().is_empty())));
+                if let Err(e) = res {
                     err_banner.set(Some(e));
                 }
-            }
-        });
+            });
+        } else {
+            spawn_local(async move {
+                let res = api::send_message(id, text.clone()).await;
+                sending.set(false);
+                // Drop the placeholder + optimistic user message before reconciling.
+                messages.update(|l| l.retain(|m| m.id != -1 && m.id != 0));
+                match res {
+                    Ok(resp) => {
+                        messages.update(|l| l.push(resp.user));
+                        if let Some(reply) = resp.reply {
+                            messages.update(|l| l.push(reply));
+                        }
+                        if let Some(err) = resp.error {
+                            // LLM/upstream failure: the user message IS saved, but no
+                            // reply was generated. Banner offers Retry (regenerate).
+                            err_banner.set(Some(err));
+                        }
+                    }
+                    Err(e) => {
+                        // Network / backend error: the user message wasn't saved.
+                        // Restore the draft so nothing is lost.
+                        draft.set(text);
+                        err_banner.set(Some(e));
+                    }
+                }
+            });
+        }
     };
 
     let do_regenerate = move || {
@@ -147,36 +223,87 @@ pub fn Chat(id: i64) -> impl IntoView {
             messages.update(|l| { l.pop(); });
         }
         err_banner.set(None);
+        let streaming = stream_on.get_untracked();
+        let ph = if streaming { String::new() } else { "\u{2026}".to_string() };
         messages.update(|l| l.push(MessageView {
-            id: -1, from_user: false, text: "\u{2026}".into(), variants: Vec::new(), variant: 0,
+            id: -1, from_user: false, text: ph, variants: Vec::new(), variant: 0,
         }));
         sending.set(true);
 
-        spawn_local(async move {
-            let res = api::regenerate(id).await;
-            sending.set(false);
-            messages.update(|l| l.retain(|m| m.id != -1));
-            match res {
-                // Success: the server appended a new swipe variant (same id).
-                Ok(resp) if resp.reply.is_some() => {
-                    messages.update(|l| l.push(resp.reply.unwrap()));
-                }
-                // Structured error OR transport error: restore the prior reply
-                // and surface a dismissable banner. No error bubble is created.
-                Ok(resp) => {
-                    if let Some(prev) = stashed {
+        if streaming {
+            stop_stream.set(false);
+            let stashed_s = stashed.clone();
+            spawn_local(async move {
+                let url = format!("/api/chats/{id}/regenerate/stream");
+                let res = crate::stream::stream_post(
+                    &url,
+                    serde_json::Value::Null,
+                    move |msg| match msg {
+                        StreamMsg::Delta { v } => messages.update(|l| {
+                            if let Some(m) = l.iter_mut().find(|m| m.id == -1) {
+                                m.text.push_str(&v);
+                            }
+                        }),
+                        StreamMsg::Done { id: rid, variants, variant } => messages.update(|l| {
+                            if let Some(m) = l.iter_mut().find(|m| m.id == -1) {
+                                m.id = rid;
+                                if !variants.is_empty() {
+                                    m.variant = variant;
+                                    if let Some(t) = variants.get(variant.max(0) as usize) {
+                                        m.text = t.clone();
+                                    }
+                                    m.variants = variants;
+                                }
+                            }
+                        }),
+                        StreamMsg::Error { v } => err_banner.set(Some(v)),
+                        StreamMsg::User { .. } => {}
+                    },
+                    move || stop_stream.get_untracked(),
+                )
+                .await;
+                sending.set(false);
+                // If the placeholder is still empty (errored before any token),
+                // drop it and restore the prior reply so nothing is lost.
+                let empty = messages
+                    .with_untracked(|l| l.iter().any(|m| m.id == -1 && m.text.trim().is_empty()));
+                if empty {
+                    messages.update(|l| l.retain(|m| m.id != -1));
+                    if let Some(prev) = stashed_s {
                         messages.update(|l| l.push(prev));
                     }
-                    err_banner.set(Some(resp.error.unwrap_or_else(|| "Generation failed.".into())));
                 }
-                Err(e) => {
-                    if let Some(prev) = stashed {
-                        messages.update(|l| l.push(prev));
-                    }
+                if let Err(e) = res {
                     err_banner.set(Some(e));
                 }
-            }
-        });
+            });
+        } else {
+            spawn_local(async move {
+                let res = api::regenerate(id).await;
+                sending.set(false);
+                messages.update(|l| l.retain(|m| m.id != -1));
+                match res {
+                    // Success: the server appended a new swipe variant (same id).
+                    Ok(resp) if resp.reply.is_some() => {
+                        messages.update(|l| l.push(resp.reply.unwrap()));
+                    }
+                    // Structured error OR transport error: restore the prior reply
+                    // and surface a dismissable banner. No error bubble is created.
+                    Ok(resp) => {
+                        if let Some(prev) = stashed {
+                            messages.update(|l| l.push(prev));
+                        }
+                        err_banner.set(Some(resp.error.unwrap_or_else(|| "Generation failed.".into())));
+                    }
+                    Err(e) => {
+                        if let Some(prev) = stashed {
+                            messages.update(|l| l.push(prev));
+                        }
+                        err_banner.set(Some(e));
+                    }
+                }
+            });
+        }
     };
 
     // Switch which stored variant (swipe) of a bot message is shown.
@@ -316,7 +443,12 @@ pub fn Chat(id: i64) -> impl IntoView {
                         </div>
                     }.into_any()
                 } else {
-                    view! { <div class="msg__bubble">{render_text(&text)}</div> }.into_any()
+                    let bubble = if from_user {
+                        view! { <div class="msg__bubble">{render_text(&text)}</div> }.into_any()
+                    } else {
+                        view! { <div class="msg__bubble">{render_bot(&text)}</div> }.into_any()
+                    };
+                    bubble
                 };
 
                 // Swipe controls: shown on the last bot message when it has
@@ -412,6 +544,8 @@ pub fn Chat(id: i64) -> impl IntoView {
 
                 // Memory panel
                 let memory_open = RwSignal::new(false);
+                // Hamburger dropdown (everything except the proxy/settings icon)
+                let menu_open = RwSignal::new(false);
 
                 view! {
                     <div class="chat">
@@ -449,24 +583,47 @@ pub fn Chat(id: i64) -> impl IntoView {
                                         </span>
                                     }.into_any()
                                 }}
-                                <span class="chat__creator">{move || {
-                                    let n = character_name.get();
-                                    if n.is_empty() { String::new() } else { format!("with {n}") }
-                                }}</span>
                             </div>
-                            <button class="chat__model" on:click=move |_| settings_open.set(true)>
+                            <button class="chat__model" title="API / model settings"
+                                on:click=move |_| settings_open.set(true)>
                                 {model_label}
                             </button>
                             <div class="chat__menuwrap">
-                                <button class="chat__menubtn" on:click=move |_| memory_open.update(|v| *v = !*v)>
+                                <button class="chat__menubtn" aria-label="Menu"
+                                    on:click=move |_| menu_open.update(|v| *v = !*v)>
                                     "\u{2630}"
                                 </button>
-                                {move || memory_open.get().then(|| view! {
+                                {move || menu_open.get().then(|| view! {
                                     <>
-                                        <div class="menu-backdrop" on:click=move |_| memory_open.set(false)></div>
+                                        <div class="menu-backdrop" on:click=move |_| menu_open.set(false)></div>
                                         <div class="chat__menu">
-                                            <button on:click=move |_| { settings_open.set(true); memory_open.set(false); }>"\u{2699} API Settings"</button>
-                                            <button on:click=move |_| { persona_open.set(true); memory_open.set(false); }>"\u{1F464} Persona"</button>
+                                            <button on:click=move |_| { page.set(Page::Home); menu_open.set(false); }>"\u{1F3E0} Discover"</button>
+                                            <button on:click=move |_| { page.set(Page::Chats); menu_open.set(false); }>"\u{1F4AC} Chats"</button>
+                                            <button on:click=move |_| { page.set(Page::Create); menu_open.set(false); }>"\u{2795} Create"</button>
+                                            <div class="chat__menu-sep"></div>
+                                            <button on:click=move |_| { persona_open.set(true); menu_open.set(false); }>"\u{1F464} Persona"</button>
+                                            <button on:click=move |_| { memory_open.set(true); menu_open.set(false); }>"\u{1F9E0} Chat memory"</button>
+                                            <button on:click=move |_| {
+                                                let cur = chat_title.get();
+                                                title_draft.set(if cur.trim().is_empty() { character_name.get() } else { cur });
+                                                editing_title.set(true);
+                                                menu_open.set(false);
+                                            }>"\u{270E} Rename chat"</button>
+                                            <button class=("chat__menu--on", move || nsfw.get())
+                                                on:click=move |_| nsfw.update(|v| *v = !*v)>
+                                                {move || if nsfw.get() { "\u{1F513} NSFW \u{00B7} on" } else { "\u{1F512} NSFW \u{00B7} off" }}
+                                            </button>
+                                            <button class=("chat__menu--on", move || stream_on.get())
+                                                on:click=move |_| {
+                                                    let v = !stream_on.get_untracked();
+                                                    stream_on.set(v);
+                                                    crate::theme::save_stream(v);
+                                                }>
+                                                {move || if stream_on.get() { "\u{26A1} Streaming \u{00B7} on" } else { "\u{26A1} Streaming \u{00B7} off" }}
+                                            </button>
+                                            <div class="chat__menu-sep"></div>
+                                            <div class="chat__menu-label">"Theme"</div>
+                                            <crate::theme::ThemePicker/>
                                         </div>
                                     </>
                                 })}
@@ -510,9 +667,23 @@ pub fn Chat(id: i64) -> impl IntoView {
                                     }
                                 }
                             ></textarea>
-                            <button class="chat__send" prop:disabled=move || sending.get() on:click=move |_| do_send()>
-                                "Send"
-                            </button>
+                            {move || if sending.get() && stream_on.get() {
+                                // Mid-stream: offer Stop (cancels rendering; the
+                                // server still finishes and saves the reply).
+                                view! {
+                                    <button class="chat__send chat__send--stop"
+                                        on:click=move |_| stop_stream.set(true)>
+                                        "\u{25A0} Stop"
+                                    </button>
+                                }.into_any()
+                            } else {
+                                view! {
+                                    <button class="chat__send" prop:disabled=move || sending.get()
+                                        on:click=move |_| do_send()>
+                                        "Send"
+                                    </button>
+                                }.into_any()
+                            }}
                         </div>
 
                         // Chat memory panel (slide-in)

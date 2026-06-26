@@ -116,6 +116,23 @@ IDs are `FR-<area>-<n>`. **MUST** = required for production-grade; **SHOULD** = 
 - **FR-CHM-1 (MUST)** A Chats tab listing all recent conversations newest-first with avatar, last-message snippet, and relative time.
 - **FR-CHM-2 (MUST)** Delete a chat (cascades messages).
 
+### 3.7 Theming
+- **FR-THM-1 (MUST)** Multiple selectable color themes driven by CSS custom properties on a `[data-theme]` attribute. Initial set: **iris** (default violet→magenta), **ocean** (muted, eye-soothing blue), **azure** (blackest-black + vivid blue), **crimson** (blackest-black + maroon), **ember** (warm amber), **emerald** (green), **slate** (near-monochrome).
+- **FR-THM-2 (MUST)** A theme switcher (color swatches) reachable from the nav menu and the chat menu; selection applies instantly.
+- **FR-THM-3 (MUST)** Theme persists across reloads (localStorage; per-device).
+- **FR-THM-4 (SHOULD)** The ambient background ("aurora") recolors per theme; `prefers-reduced-motion` still disables motion.
+- **FR-THM-5 (MAY)** Light-mode variants and a custom-accent picker.
+
+### 3.8 Streaming & reasoning
+- **FR-STR-1 (SHOULD)** Stream the model reply token-by-token (SSE) so text appears live instead of arriving whole. Backend proxies the upstream stream; frontend renders incrementally.
+- **FR-STR-2 (SHOULD)** A global **stream on/off** toggle; when off, fall back to the current whole-response path. Per-provider stream delta path is configurable with preset defaults (OpenAI `choices.0.delta.content`, Anthropic `delta.text`, etc.).
+- **FR-STR-3 (SHOULD)** A **stop/cancel** button to abort an in-flight stream, keeping whatever streamed so far.
+- **FR-STR-4 (MUST)** **Collapsible "thinking" box**: reasoning emitted as `<think>…</think>` / `<thinking>…</thinking>` (and provider `reasoning`/`reasoning_content` when streamed) is extracted from the reply and rendered as a collapsed `<details>` panel above the answer, never dumped raw into the bubble. Streams into the box live while reasoning, then collapses when the answer begins.
+
+### 3.9 Chat information architecture
+- **FR-CIA-1 (MUST)** The chat view uses a **single compact top bar** (no stacked bars): back + character avatar + character name, with a dedicated proxy/model icon and one hamburger menu holding everything else (persona, chat memory, rename, theme, navigation, NSFW). The global app bar is suppressed inside a chat.
+- **FR-CIA-2 (MUST)** A spacious, uncluttered message area (generous line-height, bubble padding, and message spacing; comfortable reading width on large screens).
+
 ---
 
 ## 4. Non-Functional Requirements
@@ -192,10 +209,13 @@ All under `/api`, JSON in/out.
 5. **Rotate the compromised GitHub PAT + HF token** and move to env-only secrets.
 
 **P1 — headline features**
-6. Streaming responses + stop button (FR-CHT-10/11) — biggest perceived-quality jump.
-7. Character export (JSON + PNG round-trip) (FR-CHR-5).
-8. Token meter + context trimming (FR-CHT-12).
-9. "Test connection" in settings (FR-CON-5).
+6. **Theme system + switcher (FR-THM-\*)** — multi-theme palettes incl. muted-blue "ocean", black/maroon, black/blue. *(done — 7 palettes, picker in sidebar + chat menu, localStorage)*
+7. **Chat IA redesign + spacious layout (FR-CIA-\*)** — single compact bar, hamburger consolidation. *(done)*
+8. **Collapsible thinking box (FR-STR-4)** — reasoning in a `<details>` panel. *(done — `<think>`/`reasoning_content` split into a collapsed box, live during streaming)*
+9. **Streaming responses + stop + on/off (FR-STR-1/2/3)** — biggest perceived-quality jump; backend SSE. *(done — backend NDJSON token stream over reqwest `bytes_stream`, frontend Fetch `ReadableStream` reader, stop + on/off toggle, OpenAI-shaped with non-stream fallback)*
+10. Character export (JSON + PNG round-trip) (FR-CHR-5).
+11. Token meter + context trimming (FR-CHT-12).
+12. "Test connection" in settings (FR-CON-5).
 
 **P2 — scale & polish**
 10. Server-side gallery pagination/search (FR-GAL-5).

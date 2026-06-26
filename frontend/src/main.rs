@@ -16,6 +16,8 @@ mod home;
 mod markdown;
 mod persona;
 mod settings;
+mod stream;
+mod theme;
 mod upload;
 mod util;
 
@@ -88,6 +90,14 @@ fn App() -> impl IntoView {
     provide_context(PersonaOpen(RwSignal::new(false)));
     provide_context(MobileNavOpen(RwSignal::new(false)));
 
+    // Theme: apply the saved palette to <html> before first paint, then keep it
+    // in context so the picker (sidebar + chat menu) stays in sync.
+    let initial_theme = theme::load_theme();
+    theme::apply_theme(&initial_theme);
+    provide_context(theme::ThemeCtx(RwSignal::new(initial_theme)));
+    // Streaming on/off preference (per-device, persisted to localStorage).
+    provide_context(theme::StreamCtx(RwSignal::new(theme::load_stream())));
+
     // Load settings from the server once at startup; surface the active proxy +
     // persona into context.
     spawn_local(async move {
@@ -119,7 +129,7 @@ fn App() -> impl IntoView {
             {move || mobile_open.get().then(|| view! {
                 <div class="sidebar-backdrop" on:click=move |_| mobile_open.set(false)></div>
             })}
-            <main class="shell__main">
+            <main class="shell__main" class=("shell__main--chat", move || matches!(page.get(), Page::Chat(_)))>
                 {move || match page.get() {
                     Page::Home => view! { <div class="content"><Home/></div> }.into_any(),
                     Page::Chats => view! { <div class="content"><Chats/></div> }.into_any(),
