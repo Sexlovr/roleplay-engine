@@ -597,9 +597,13 @@ pub fn Chat(id: i64) -> impl IntoView {
                                     <>
                                         <div class="menu-backdrop" on:click=move |_| menu_open.set(false)></div>
                                         <div class="chat__menu">
-                                            <button on:click=move |_| { page.set(Page::Home); menu_open.set(false); }>"\u{1F3E0} Discover"</button>
-                                            <button on:click=move |_| { page.set(Page::Chats); menu_open.set(false); }>"\u{1F4AC} Chats"</button>
-                                            <button on:click=move |_| { page.set(Page::Create); menu_open.set(false); }>"\u{2795} Create"</button>
+                                            // Navigating unmounts this whole chat view (and the menu with
+                                            // it), so DON'T also touch `menu_open` here — notifying the
+                                            // menu's reactive closure while its scope is being disposed
+                                            // panics ("accessed a disposed reactive value"). Just navigate.
+                                            <button on:click=move |_| page.set(Page::Home)>"\u{1F3E0} Discover"</button>
+                                            <button on:click=move |_| page.set(Page::Chats)>"\u{1F4AC} Chats"</button>
+                                            <button on:click=move |_| page.set(Page::Create)>"\u{2795} Create"</button>
                                             <div class="chat__menu-sep"></div>
                                             <button on:click=move |_| { persona_open.set(true); menu_open.set(false); }>"\u{1F464} Persona"</button>
                                             <button on:click=move |_| { memory_open.set(true); menu_open.set(false); }>"\u{1F9E0} Chat memory"</button>
